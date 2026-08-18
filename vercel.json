@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "public/**/*",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.js"
+    },
+    {
+      "src": "/index\\.html",
+      "dest": "/api/index.js"
+    },
+    {
+      "src": "/(.*\\.(?:css|js|html|png|jpg|jpeg|svg|ico|webp))",
+      "dest": "/public/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/admin/sync",
+      "schedule": "17 */2 * * *"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Metodologia de fontes e verificação do VotoClaro.">
+  <title>Metodologia — VotoClaro</title>
+  <link rel="stylesheet" href="/official.css?v=2.7.0">
+</head>
+<body>
+  <main class="legal-page">
+    <a class="legal-back" href="/">← Voltar ao VotoClaro</a>
+    <article class="legal-card">
+      <p class="eyebrow">Auditoria aberta</p>
+      <h1>Metodologia de dados</h1>
+      <p class="legal-updated">Versão de 17 de agosto de 2026</p>
+
+      <h2>Princípios</h2>
+      <ul class="principle-list">
+        <li><strong>Sem estimativas ocultas:</strong> um campo ausente é exibido como não publicado.</li>
+        <li><strong>Fonte por registro:</strong> cada candidatura mantém órgão, endereço e horário de origem.</li>
+        <li><strong>Histórico:</strong> alterações entre publicações são registradas, sem apagar a versão anterior no banco de produção.</li>
+        <li><strong>Separação:</strong> fonte oficial, fonte secundária e análise editorial nunca são apresentadas como equivalentes.</li>
+        <li><strong>Neutralidade:</strong> a comparação não declara vencedores e não cria notas automáticas.</li>
+      </ul>
+
+      <h2>Fonte canônica das candidaturas</h2>
+      <p>A base canônica é o conjunto <a href="https://dadosabertos.tse.jus.br/dataset/candidatos-2026" rel="noopener noreferrer">Candidatos 2026 do Tribunal Superior Eleitoral</a>. O sistema importa candidaturas, bens e redes sociais declaradas a partir dos pacotes oficiais publicados no CDN do TSE.</p>
+
+      <h2>Periodicidade</h2>
+      <p>O VotoClaro pode consultar as fontes em intervalos menores, mas a atualidade real depende da publicação de cada órgão. Os arquivos de candidaturas têm frequência informada como diária. Recursos de campanha podem ser comunicados à Justiça Eleitoral em até 72 horas após o recebimento.</p>
+
+      <h2>Transformações</h2>
+      <p>Os dados são convertidos para nomes de campos consistentes, valores monetários são transformados para formato numérico e a situação da candidatura recebe uma categoria de interface. O texto integral publicado pelo TSE continua disponível no campo de situação e prevalece sobre a categoria visual.</p>
+
+      <h2>Fotos oficiais</h2>
+      <p>Os retratos são extraídos dos arquivos JPEG de 2026 publicados diariamente pelo TSE para cada UF e para a eleição presidencial. A associação usa exclusivamente o identificador <code>SQ_CANDIDATO</code> codificado no nome do arquivo. Não usamos reconhecimento facial, busca por nome ou imagens de redes sociais. Se o retrato não estiver no arquivo oficial, mostramos as iniciais.</p>
+
+      <h2>Localização e filtro por UF</h2>
+      <p>A localização é opcional e ativada somente por clique. O navegador recebe do servidor a malha estadual oficial do IBGE, identifica localmente em qual polígono está o ponto e passa a consultar candidaturas usando apenas a sigla da UF. Coordenadas precisas não são transmitidas nem armazenadas pelo VotoClaro. O filtro manual permanece disponível.</p>
+
+      <h2>Mais consultados</h2>
+      <p>A faixa inicial ordena candidaturas pelo número agregado de vezes que suas fichas completas foram abertas no VotoClaro. Botões de comparação e colinha não entram na contagem. A faixa é removida da tela assim que uma busca, localização ou paginação é iniciada, para não interferir na ordem dos resultados filtrados.</p>
+      <p>A interface tenta contar no máximo uma abertura por candidatura em cada sessão do navegador e o servidor limita volumes anormais de requisições. Isso reduz repetições simples, mas não comprova pessoas únicas e não impede toda tentativa de manipulação. Por esse motivo, os números são descritos somente como consultas: não representam apoio, intenção de voto, aprovação, tendência eleitoral ou recomendação do VotoClaro. Empates são desfeitos pela abertura mais recente.</p>
+
+      <h2>Propostas de governo</h2>
+      <p>Para candidaturas a presidente e governador, o portal consulta os pacotes “Proposta de governo” do conjunto Candidatos 2026 do TSE. O PDF é associado exclusivamente pelo <code>SQ_CANDIDATO</code> presente no nome do documento. Se o arquivo não existir para aquele identificador, o portal informa que não foi publicado e não procura um substituto por nome, partido ou busca na internet.</p>
+      <p>Quando o PDF contém texto extraível, o portal processa todas as páginas e aplica a mesma taxonomia a todos os documentos: Educação; Emprego e economia; Tecnologia e inovação; Gestão e transparência; Saúde; Mobilidade e infraestrutura; Proteção social; Cultura, esporte e turismo; e Segurança pública e combate ao crime organizado. Em cada tema, são selecionados até três trechos que combinam vocabulário da área com linguagem de ação, objetivo, meta, programa ou proposta.</p>
+      <p>Os trechos são reproduzidos de forma extrativa e mantêm a página de origem. O nome do capítulo ou da seção só é mostrado quando um título reconhecível aparece antes do trecho na mesma página extraída; se isso não ocorrer, o portal informa que a seção não foi identificada, sem inventar um título. “Não identificado” significa apenas que o classificador não encontrou simultaneamente tema e linguagem de proposta: não comprova que o assunto esteja ausente do documento.</p>
+      <p>A classificação não completa frases e não avalia custo, viabilidade, benefício, prioridade ou chance de cumprimento. Documentos digitalizados somente como imagem permanecem disponíveis em PDF, sem classificação temática, até existir extração confiável.</p>
+
+      <h2>Projetos legislativos e impacto</h2>
+      <p>Projetos são exibidos somente quando nome de urna, UF e partido correspondem exatamente a um parlamentar em exercício nas fontes oficiais da Câmara ou do Senado. O recorte mostra até cinco matérias recentes dos tipos legislativos definidos, com ementa, situação e link oficial. Requerimentos meramente procedimentais não entram no recorte do Senado.</p>
+      <p>Uma proposição não é apresentada como lei. “Virou norma jurídica” só aparece quando a situação oficial informa essa conversão. Mesmo nesse caso, o VotoClaro não presume benefício, prejuízo ou magnitude de impacto: efeito real na população exige evidência pública de implementação ou avaliação posterior.</p>
+
+      <h2>Dados financeiros</h2>
+      <p>Totais são somas aritméticas das linhas publicadas pelo TSE. Não estimamos doadores, despesas ainda não entregues nem valores futuros. Duplicidades e retificações precisam ser tratadas conforme a identificação e a versão fornecidas pela fonte.</p>
+
+      <h2>Fiscalização, dinheiro público e integridade</h2>
+      <p>O portal consulta quatro cadastros oficiais do TCU: contas julgadas irregulares com decisão transitada em julgado, contas com possível implicação eleitoral, responsáveis inabilitados e licitantes inidôneos. Quando a chave oficial está configurada, consulta também CEIS, CNEP e CEAF no Portal da Transparência.</p>
+      <p>A associação é feita exclusivamente com o CPF completo publicado pelo TSE no arquivo de candidaturas. Esse identificador fica somente na memória do servidor: não entra no snapshot, no banco público, nos logs, nas métricas ou na resposta enviada ao navegador. Resultados cujo identificador devolvido pela fonte não seja idêntico são descartados.</p>
+      <p>Cada item mantém o estágio declarado pelo órgão. Decisão sobre contas, possível implicação eleitoral, inabilitação, sanção administrativa, investigação e condenação judicial não são equivalentes. O VotoClaro não atribui culpa, inelegibilidade, nota, ranking ou rótulo de “escândalo”. Nenhum resultado retornado também não funciona como certidão de idoneidade.</p>
+
+      <h2>Outros processos e alegações</h2>
+      <p>Não associamos processos a uma candidatura apenas por semelhança de nome. Informações judiciais só podem ser publicadas após identificação inequívoca, número do processo, link oficial, situação atual e revisão humana. Inquérito, acusação, condenação e arquivamento são estados distintos.</p>
+
+      <h2>Integridade da importação</h2>
+      <p>Cada versão recebe um checksum SHA-256, horário de importação, horário informado pela fonte, contagem de registros e histórico de execução. O painel “Fontes” permite acompanhar falhas e indisponibilidades. A contagem de consultas é armazenada separadamente dos dados oficiais e nunca altera nem reordena o resultado de uma busca.</p>
+
+      <h2>Correções</h2>
+      <p>O portal deve publicar, antes do lançamento, um endereço para correções. Uma correção editorial não pode alterar silenciosamente o dado bruto da fonte: deve gerar uma nova versão e registrar a justificativa.</p>
+    </article>
+  </main>
+</body>
+</html>

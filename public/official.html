@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="VotoClaro — candidaturas das Eleições 2026 com dados oficiais, fonte, data e histórico de atualização.">
+  <meta name="theme-color" content="#102a43">
+  <title>VotoClaro — Eleições 2026 com fonte</title>
+  <link rel="stylesheet" href="/official.css?v=2.7.0">
+  <script src="/geolocation.js?v=2.1.0" defer></script>
+  <script src="/official.js?v=2.7.0" defer></script>
+</head>
+<body class="portal-page">
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <button class="brand" type="button" data-view-target="explore" aria-label="Ir para candidaturas">
+        <span class="brand-mark" aria-hidden="true">VC</span>
+        <span><strong>VotoClaro</strong><small>Eleições 2026</small></span>
+      </button>
+      <nav class="main-nav" aria-label="Navegação principal">
+        <button class="nav-link active" type="button" data-view-target="explore">Candidaturas</button>
+        <button class="nav-link" type="button" data-view-target="compare">Comparar <span id="compareCount" class="nav-count">0</span></button>
+        <button class="nav-link" type="button" data-view-target="changes">Atualizações</button>
+        <button class="nav-link" type="button" data-view-target="sources">Fontes</button>
+      </nav>
+      <div id="healthBadge" class="health-badge is-loading" role="status">
+        <span class="health-dot"></span><span>Verificando dados</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="conteudo">
+    <section class="hero">
+      <div class="hero-inner">
+        <div>
+          <p class="eyebrow">Transparência eleitoral rastreável</p>
+          <h1>Antes de escolher, confira a fonte.</h1>
+          <p class="hero-copy">Candidaturas publicadas pela Justiça Eleitoral, sem notas inventadas, estimativas ou acusações automáticas.</p>
+        </div>
+        <div class="hero-proof" aria-label="Compromissos de dados">
+          <div><strong id="candidateTotalHero">—</strong><span>candidaturas oficiais</span></div>
+          <div><strong>100%</strong><span>com origem identificada</span></div>
+          <div><strong>0</strong><span>dados simulados</span></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="globalNotice" class="global-notice" hidden></div>
+
+    <section id="view-explore" class="view active" aria-labelledby="exploreTitle">
+      <div class="content-grid">
+        <div class="primary-column">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Base oficial de 2026</p>
+              <h2 id="exploreTitle">Consulte candidaturas</h2>
+            </div>
+            <p id="snapshotTime" class="snapshot-time">Aguardando primeira sincronização</p>
+          </div>
+
+          <div class="location-assist">
+            <div>
+              <strong>Ver candidaturas do seu estado</strong>
+              <p id="locationStatus" role="status" aria-live="polite">A localização só será solicitada após seu clique. As coordenadas não são enviadas nem armazenadas.</p>
+            </div>
+            <button id="useLocation" class="secondary-button location-button" type="button">Usar minha localização</button>
+          </div>
+
+          <section id="popularSection" class="popular-section" aria-labelledby="popularTitle">
+            <div class="popular-heading">
+              <div>
+                <p class="eyebrow">Interesse público no portal</p>
+                <h3 id="popularTitle">Mais consultados</h3>
+              </div>
+              <span>Atualizado a cada ficha aberta</span>
+            </div>
+            <p class="popular-disclaimer">A ordem considera somente aberturas agregadas das fichas. Consulta não significa apoio, intenção de voto ou recomendação. Esta faixa desaparece quando você inicia uma busca.</p>
+            <div id="popularGrid" class="popular-grid" aria-live="polite" aria-busy="true">
+              <div class="popular-empty">Carregando consultas registradas…</div>
+            </div>
+          </section>
+
+          <form id="filterForm" class="filters" role="search">
+            <label class="search-field">
+              <span>Nome, número ou partido</span>
+              <input id="searchInput" name="q" type="search" maxlength="120" placeholder="Ex.: nome da urna, 13, partido..." autocomplete="off">
+            </label>
+            <label><span>Cargo</span><select id="officeFilter" name="office"><option value="">Todos os cargos</option></select></label>
+            <label><span>UF</span><select id="stateFilter" name="uf"><option value="">Brasil</option></select></label>
+            <label><span>Partido</span><select id="partyFilter" name="party"><option value="">Todos</option></select></label>
+            <label><span>Situação</span>
+              <select id="statusFilter" name="status">
+                <option value="">Todas</option>
+                <option value="APPROVED">Deferida</option>
+                <option value="PENDING">Em análise</option>
+                <option value="DENIED">Indeferida</option>
+                <option value="WITHDRAWN">Renúncia</option>
+                <option value="CANCELLED">Cancelada/cassada</option>
+              </select>
+            </label>
+            <button class="primary-button filter-button" type="submit">Buscar</button>
+          </form>
+
+          <div class="results-bar">
+            <p id="resultCount" aria-live="polite">Carregando dados oficiais…</p>
+            <div class="results-actions">
+              <button id="mobileColinhaShortcut" class="mobile-colinha-shortcut" type="button">Minha colinha</button>
+              <button id="clearFilters" class="text-button" type="button">Limpar filtros</button>
+            </div>
+          </div>
+          <div id="candidateGrid" class="candidate-grid" aria-live="polite" aria-busy="true"></div>
+          <div class="pagination">
+            <button id="previousPage" class="secondary-button" type="button">Anterior</button>
+            <span id="pageInfo">Página 1</span>
+            <button id="nextPage" class="secondary-button" type="button">Próxima</button>
+          </div>
+        </div>
+
+        <aside class="side-column" aria-labelledby="colinhaTitle">
+          <div class="sticky-card colinha-card">
+            <div class="card-heading">
+              <div><p class="eyebrow">Privada por padrão</p><h2 id="colinhaTitle">Minha colinha</h2></div>
+              <span class="local-pill">Só neste aparelho</span>
+            </div>
+            <p class="muted">As escolhas ficam no seu navegador. Não pedimos CPF, endereço ou cadastro.</p>
+            <div id="colinhaSlots" class="colinha-slots"></div>
+            <div class="colinha-actions">
+              <button id="printColinha" class="secondary-button" type="button">Imprimir</button>
+              <button id="clearColinha" class="danger-text-button" type="button">Limpar</button>
+            </div>
+            <a class="inline-link" href="/privacy.html">Como protegemos sua privacidade</a>
+            <button id="backToCandidates" class="mobile-back-button" type="button">Voltar às candidaturas</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="view-compare" class="view" aria-labelledby="compareTitle">
+      <div class="wide-section">
+        <div class="section-heading">
+          <div><p class="eyebrow">Comparação neutra</p><h2 id="compareTitle">Compare fatos publicados</h2></div>
+          <button id="clearComparison" class="text-button" type="button">Limpar comparação</button>
+        </div>
+        <p class="section-intro">Além do registro eleitoral, a comparação mostra propostas de governo publicadas pelo TSE e até cinco projetos legislativos vinculados apenas quando há correspondência exata com um mandato atual.</p>
+        <p class="mobile-scroll-hint">Deslize a tabela para os lados para comparar todos os campos.</p>
+        <div id="comparisonContent" class="comparison-content"></div>
+      </div>
+    </section>
+
+    <section id="view-changes" class="view" aria-labelledby="changesTitle">
+      <div class="wide-section narrow">
+        <div class="section-heading"><div><p class="eyebrow">Histórico do dado</p><h2 id="changesTitle">Mudanças detectadas</h2></div></div>
+        <p class="section-intro">Alterações entre a publicação oficial anterior e a atual. Uma mudança detectada não é interpretação editorial.</p>
+        <div id="changesList" class="timeline-list"></div>
+      </div>
+    </section>
+
+    <section id="view-sources" class="view" aria-labelledby="sourcesTitle">
+      <div class="wide-section">
+        <div class="section-heading"><div><p class="eyebrow">Auditoria aberta</p><h2 id="sourcesTitle">Fontes e atualizações</h2></div></div>
+        <div class="method-card">
+          <strong>Regra de publicação do VotoClaro</strong>
+          <p>O dado oficial é reproduzido com origem e horário. Se não estiver disponível, mostramos “não publicado”. Fontes secundárias jamais substituem o registro oficial.</p>
+          <a class="inline-link" href="/methodology.html">Ler metodologia completa</a>
+        </div>
+        <div id="sourceGrid" class="source-grid"></div>
+        <div class="sync-panel">
+          <h3>Últimas execuções</h3>
+          <div id="syncRuns" class="sync-runs"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="candidateDialog" class="candidate-dialog">
+    <button class="dialog-close" type="button" data-close-dialog aria-label="Fechar">×</button>
+    <div id="candidateDetail"></div>
+  </dialog>
+
+  <footer class="site-footer">
+    <div><strong>VotoClaro</strong><p>Projeto independente. Não representa o TSE nem qualquer candidatura ou partido.</p></div>
+    <nav aria-label="Links institucionais"><a href="/methodology.html">Metodologia</a><a href="/privacy.html">Privacidade</a><a href="https://dadosabertos.tse.jus.br/dataset/candidatos-2026" rel="noopener noreferrer">Dados do TSE</a></nav>
+  </footer>
+</body>
+</html>

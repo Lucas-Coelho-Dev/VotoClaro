@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Política de privacidade do VotoClaro.">
+  <title>Privacidade — VotoClaro</title>
+  <link rel="stylesheet" href="/official.css?v=2.4.0">
+</head>
+<body>
+  <main class="legal-page">
+    <a class="legal-back" href="/">← Voltar ao VotoClaro</a>
+    <article class="legal-card">
+      <p class="eyebrow">Privacidade por padrão</p>
+      <h1>Política de privacidade</h1>
+      <p class="legal-updated">Versão de 17 de agosto de 2026</p>
+
+      <h2>Resumo</h2>
+      <p>O VotoClaro pode ser usado sem cadastro. Não solicitamos CPF, endereço, idade ou nome para consultar candidaturas. A colinha eleitoral fica armazenada somente no navegador utilizado e não é transmitida ao servidor.</p>
+
+      <h2>Colinha eleitoral</h2>
+      <p>Uma escolha eleitoral pode revelar opinião política, classificada pela LGPD como dado pessoal sensível. Por isso:</p>
+      <ul>
+        <li>a colinha é local e opcional;</li>
+        <li>não há sincronização em nuvem;</li>
+        <li>não associamos a colinha a uma identidade;</li>
+        <li>o usuário pode apagá-la a qualquer momento;</li>
+        <li>a remoção dos dados do navegador também apaga a colinha.</li>
+      </ul>
+
+      <h2>Localização opcional</h2>
+      <p>O site não solicita localização automaticamente. O navegador pede permissão somente quando o usuário seleciona “Usar minha localização”. Latitude e longitude são comparadas, no próprio aparelho, com a malha oficial das unidades federativas fornecida pelo IBGE. As coordenadas não entram na URL, não são enviadas ao servidor, não são salvas na colinha nem ficam no armazenamento local. O servidor recebe apenas a consulta normal de candidaturas pela sigla da UF identificada.</p>
+      <p>A permissão pode ser revogada nas configurações do navegador. Em celulares e fora de <code>localhost</code>, os navegadores normalmente exigem uma conexão HTTPS para liberar o recurso.</p>
+
+      <h2>Registros técnicos</h2>
+      <p>O provedor de hospedagem pode registrar endereço IP, horário, rota acessada, navegador e códigos de erro para segurança e disponibilidade. Esses registros devem ser mantidos pelo menor prazo operacional possível e não devem ser combinados com preferências eleitorais.</p>
+
+      <h2>Contagem de fichas consultadas</h2>
+      <p>Quando a ficha de uma candidatura é aberta, o servidor soma uma unidade a um contador agregado daquela candidatura. Esse contador não guarda identidade, localização, conteúdo da colinha ou identificador do navegador. Ele serve exclusivamente para formar a faixa “Mais consultados” da página inicial.</p>
+      <p>Durante a sessão, o navegador usa <code>sessionStorage</code> para não contar novamente a mesma candidatura. Essa lista temporária contém somente identificadores públicos de candidaturas, não é enviada ao servidor e normalmente é apagada ao encerrar a sessão do navegador.</p>
+
+      <h2>Cookies e publicidade</h2>
+      <p>Esta versão não utiliza publicidade comportamental, pixels de campanha, login social ou cookies de rastreamento. O armazenamento local persistente é usado apenas para a colinha; o armazenamento de sessão é usado para evitar repetir a contagem descrita acima.</p>
+
+      <h2>Dados públicos de candidaturas</h2>
+      <p>As informações sobre candidaturas vêm de fontes públicas oficiais, principalmente o Tribunal Superior Eleitoral. Planos de governo são vinculados somente pelo identificador oficial da candidatura. Não republicamos campos pessoais que não sejam necessários à finalidade de transparência eleitoral.</p>
+      <p>Para impedir associações por homônimos, o CPF publicado no arquivo oficial do TSE pode ser usado transitoriamente, somente na memória do servidor, para consultar cadastros oficiais do TCU e do Portal da Transparência. O CPF não é gravado no snapshot ou banco público, não aparece em logs ou métricas, não é enviado ao navegador e não é retornado pela API.</p>
+      <p>Os resumos automáticos de planos são derivados exclusivamente desses documentos públicos e podem permanecer em cache pelo checksum do PDF. Esse processamento não utiliza localização, colinha ou identidade do visitante.</p>
+
+      <h2>Direitos e contato</h2>
+      <p>Antes do lançamento público definitivo, o responsável pelo projeto deverá publicar um canal de contato e identificar o controlador dos dados técnicos, o operador de hospedagem e o procedimento para exercício dos direitos previstos na LGPD.</p>
+
+      <h2>Base normativa</h2>
+      <p><a href="https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709compilado.htm" rel="noopener noreferrer">Lei nº 13.709/2018 — LGPD</a> e <a href="https://www.gov.br/anpd/pt-br/centrais-de-conteudo/materiais-educativos-e-publicacoes" rel="noopener noreferrer">orientações da ANPD</a>.</p>
+    </article>
+  </main>
+</body>
+</html>

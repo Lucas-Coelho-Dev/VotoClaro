@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+database.json
+data/*.json
+data/*.zip
+data/*.tmp
+data/photos/
+data/government-plans/
+data/government-plan-summaries/
+integrations/
+coverage/
+npm-debug.log*
+.DS_Store
+Thumbs.db

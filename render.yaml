@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: votoclaro
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: votoclaro-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: SYNC_ON_START
+        value: "true"
+      - key: SYNC_INTERVAL_MINUTES
+        value: "120"
+      - key: INTEGRITY_TIMEOUT_MS
+        value: "30000"
+      - key: INTEGRITY_RETRY_COUNT
+        value: "1"
+      - key: INTEGRITY_RETRY_DELAY_MS
+        value: "500"
+      - key: INTEGRITY_CACHE_TTL_MINUTES
+        value: "360"
+      - key: INTEGRITY_ERROR_CACHE_TTL_SECONDS
+        value: "300"
+      - key: PORTAL_TRANSPARENCIA_TOKEN
+        sync: false
+      - key: SYNC_SECRET
+        generateValue: true
+
+databases:
+  - name: votoclaro-db
+    plan: basic-256mb
+    databaseName: votoclaro
+    user: votoclaro

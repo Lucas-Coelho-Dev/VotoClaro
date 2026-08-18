@@ -1,0 +1,408 @@
+// packages/database/prisma/schema.prisma
+// VotoClaro – Modelo de dados
+// Gerenciador: PostgreSQL | ORM: Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+//  ENUMS
+// ─────────────────────────────────────────────
+
+enum ConfidenceLevel {
+  OFFICIAL        // Fonte oficial primária (TSE)
+  SEMI_STRUCTURED // Dado oficial mas exige normalização
+  AUXILIARY       // Fonte secundária pública
+  UNVERIFIED      // Não confirmado em fonte oficial
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+enum CandidateStatus {
+  DEFERIDA
+  INDEFERIDA
+  CASSADA
+  RENUNCIADA
+  FALECIDA
+  PENDENTE
+}
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  MODERATOR
+  READER
+}
+
+enum EventType {
+  CANDIDATURA_REGISTRADA
+  CANDIDATURA_DEFERIDA
+  CANDIDATURA_INDEFERIDA
+  CANDIDATURA_CASSADA
+  CANDIDATURA_RENUNCIADA
+  PROPAGANDA_REGISTRADA
+  DECISAO_JUDICIAL
+  CONTA_ENTREGUE
+  CONTA_APROVADA
+  CONTA_REPROVADA
+  RECURSO_INTERPOSTO
+  MARCO_CAMPANHA
+}
+
+// ─────────────────────────────────────────────
+//  ELEIÇÃO
+// ─────────────────────────────────────────────
+
+model Election {
+  id          String   @id @default(cuid())
+  year        Int
+  type        String   // MUNICIPAL, ESTADUAL, FEDERAL
+  round       Int      @default(1)
+  name        String   // "Eleições Municipais 2024"
+  startDate   DateTime
+  endDate     DateTime?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  candidates  Candidate[]
+  timelines   TimelineEvent[]
+
+  @@unique([year, type, round])
+  @@map("elections")
+}
+
+// ─────────────────────────────────────────────
+//  PARTIDO
+// ─────────────────────────────────────────────
+
+model Party {
+  id          String   @id @default(cuid())
+  acronym     String   @unique // PT, PL, MDB...
+  name        String
+  number      Int      @unique
+  status      String   // ATIVO, EXTINTO, INCORPORADO
+  logoUrl     String?
+  websiteUrl  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  candidates  Candidate[]
+
+  @@map("parties")
+}
+
+// ─────────────────────────────────────────────
+//  CANDIDATO
+// ─────────────────────────────────────────────
+
+model Candidate {
+  id                  String          @id @default(cuid())
+  tseId               String          @unique // SQ_CANDIDATO do TSE
+  sequentialCode      String          // NR_SEQUENCIAL
+  ballotNumber        Int             // NR_CANDIDATO
+  fullName            String          // NM_CANDIDATO
+  ballotName          String          // NM_URNA_CANDIDATO
+  cpfHash             String?         // Hash do CPF – nunca armazenamos o CPF em claro
+  birthYear           Int?
+  gender              String?
+  occupation          String?
+  educationLevel      String?
+  maritalStatus       String?
+  nationality         String?
+  cityOfBirth         String?
+  stateOfBirth        String?
+
+  // Candidatura
+  position            String          // PREFEITO, VEREADOR, etc.
+  state               String          // UF
+  city                String?
+  status              CandidateStatus
+  coalition           String?
+  federationName      String?
+  isReelectionCandidate Boolean       @default(false)
+
+  // Foto
+  photoUrl            String?
+  photoSource         String?
+
+  // Metadados de fonte
+  sourceUrl           String?
+  dataConfidence      ConfidenceLevel @default(OFFICIAL)
+  lastSyncAt          DateTime?
+
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  // Relações
+  electionId          String
+  election            Election        @relation(fields: [electionId], references: [id])
+  partyId             String?
+  party               Party?          @relation(fields: [partyId], references: [id])
+
+  assets              CandidateAsset[]
+  socialMedia         SocialMedia[]
+  financeSummary      FinanceSummary?
+  financeTransactions FinanceTransaction[]
+  timelines           TimelineEvent[]
+  verificationLogs    VerificationLog[]
+  electionResults     ElectionResult[]
+
+  @@index([ballotName])
+  @@index([fullName])
+  @@index([state])
+  @@index([position])
+  @@index([electionId])
+  @@map("candidates")
+}
+
+// ─────────────────────────────────────────────
+//  BENS DECLARADOS
+// ─────────────────────────────────────────────
+
+model CandidateAsset {
+  id          String          @id @default(cuid())
+  candidateId String
+  candidate   Candidate       @relation(fields: [candidateId], references: [id])
+  type        String          // IMOVEL, VEICULO, APLICACAO, etc.
+  description String
+  value       Decimal         @db.Decimal(15, 2)
+  order       Int
+  sourceUrl   String?
+  confidence  ConfidenceLevel @default(OFFICIAL)
+  syncedAt    DateTime        @default(now())
+
+  @@map("candidate_assets")
+}
+
+// ─────────────────────────────────────────────
+//  REDES SOCIAIS
+// ─────────────────────────────────────────────
+
+model SocialMedia {
+  id          String    @id @default(cuid())
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+  platform    String    // FACEBOOK, INSTAGRAM, TWITTER, YOUTUBE, TIKTOK, WEBSITE
+  url         String
+  handle      String?
+  sourceUrl   String?
+  syncedAt    DateTime  @default(now())
+
+  @@map("social_media")
+}
+
+// ─────────────────────────────────────────────
+//  FINANÇAS – RESUMO
+// ─────────────────────────────────────────────
+
+model FinanceSummary {
+  id               String          @id @default(cuid())
+  candidateId      String          @unique
+  candidate        Candidate       @relation(fields: [candidateId], references: [id])
+  totalRevenue     Decimal         @db.Decimal(15, 2)  @default(0)
+  totalExpense     Decimal         @db.Decimal(15, 2)  @default(0)
+  balance          Decimal         @db.Decimal(15, 2)  @default(0)
+  mainDonorType    String?
+  lastUpdated      DateTime
+  sourceUrl        String?
+  confidence       ConfidenceLevel @default(OFFICIAL)
+  syncedAt         DateTime        @default(now())
+
+  @@map("finance_summaries")
+}
+
+// ─────────────────────────────────────────────
+//  FINANÇAS – TRANSAÇÕES
+// ─────────────────────────────────────────────
+
+model FinanceTransaction {
+  id            String          @id @default(cuid())
+  candidateId   String
+  candidate     Candidate       @relation(fields: [candidateId], references: [id])
+  type          String          // RECEITA | DESPESA
+  date          DateTime
+  amount        Decimal         @db.Decimal(15, 2)
+  category      String
+  subcategory   String?
+  description   String?
+  donorName     String?         // Quando receita: nome do doador (dado público TSE)
+  donorDocument String?         // Somente últimos 4 dígitos ou CNPJ parcial
+  supplierName  String?         // Quando despesa
+  supplierCnpj  String?         // CNPJ público
+  sourceUrl     String?
+  confidence    ConfidenceLevel @default(OFFICIAL)
+  syncedAt      DateTime        @default(now())
+
+  @@index([candidateId])
+  @@index([date])
+  @@index([type])
+  @@map("finance_transactions")
+}
+
+// ─────────────────────────────────────────────
+//  LINHA DO TEMPO
+// ─────────────────────────────────────────────
+
+model TimelineEvent {
+  id          String          @id @default(cuid())
+  candidateId String?
+  candidate   Candidate?      @relation(fields: [candidateId], references: [id])
+  electionId  String?
+  election    Election?       @relation(fields: [electionId], references: [id])
+  eventType   EventType
+  title       String
+  description String?
+  eventDate   DateTime
+  sourceUrl   String
+  sourceName  String
+  confidence  ConfidenceLevel @default(OFFICIAL)
+  metadata    Json?
+  createdAt   DateTime        @default(now())
+
+  @@index([candidateId])
+  @@index([eventDate])
+  @@index([eventType])
+  @@map("timeline_events")
+}
+
+// ─────────────────────────────────────────────
+//  RESULTADO ELEITORAL
+// ─────────────────────────────────────────────
+
+model ElectionResult {
+  id           String    @id @default(cuid())
+  candidateId  String
+  candidate    Candidate @relation(fields: [candidateId], references: [id])
+  votes        Int
+  validVotes   Int?
+  percentage   Decimal   @db.Decimal(8, 4)?
+  elected      Boolean
+  round        Int       @default(1)
+  position     Int?      // Classificação
+  sourceUrl    String?
+  syncedAt     DateTime  @default(now())
+
+  @@index([candidateId])
+  @@map("election_results")
+}
+
+// ─────────────────────────────────────────────
+//  LOG DE VERIFICAÇÃO / AUDITORIA DE DADOS
+// ─────────────────────────────────────────────
+
+model VerificationLog {
+  id          String          @id @default(cuid())
+  candidateId String?
+  candidate   Candidate?      @relation(fields: [candidateId], references: [id])
+  field       String
+  value       String?
+  sourceUrl   String
+  sourceName  String
+  checksum    String?         // Hash SHA-256 do conteúdo no momento do import
+  confidence  ConfidenceLevel
+  syncedAt    DateTime        @default(now())
+  validUntil  DateTime?
+
+  @@index([candidateId])
+  @@map("verification_logs")
+}
+
+// ─────────────────────────────────────────────
+//  JOB DE SINCRONIZAÇÃO
+// ─────────────────────────────────────────────
+
+model SyncJob {
+  id          String     @id @default(cuid())
+  connector   String     // tse-candidates, tse-finance, etc.
+  electionYear Int?
+  state       String?
+  status      SyncStatus @default(PENDING)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  recordsIn   Int?       // Total processado pela fonte
+  recordsOut  Int?       // Total inserido/atualizado com sucesso
+  errorCount  Int?       @default(0)
+  lastError   String?
+  metadata    Json?
+  createdAt   DateTime   @default(now())
+
+  @@index([connector])
+  @@index([status])
+  @@map("sync_jobs")
+}
+
+// Contagem pública agregada. Não registra navegador, IP, localização ou identidade.
+model CandidateViewCount {
+  candidateId  String   @id @map("candidate_id")
+  viewCount    BigInt   @default(0) @map("view_count")
+  lastViewedAt DateTime @default(now()) @map("last_viewed_at")
+
+  @@index([viewCount, lastViewedAt])
+  @@map("candidate_view_counts")
+}
+
+// ─────────────────────────────────────────────
+//  USUÁRIO / ADMIN
+// ─────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  role         UserRole   @default(READER)
+  mfaEnabled   Boolean    @default(false)
+  mfaSecret    String?
+  lastLoginAt  DateTime?
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  sessions     Session[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  token     String   @unique // bcrypt'd or UUID
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String   // "LOGIN", "EXPORT_DATA", "TRIGGER_SYNC"
+  resource  String?
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
