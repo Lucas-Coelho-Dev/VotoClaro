@@ -34,6 +34,10 @@ npm start
 
 Abra `http://localhost:3000`. Na primeira inicialização, o servidor baixa os arquivos oficiais do TSE. Enquanto a sincronização ocorre, a interface mostra que os dados ainda não estão prontos.
 
+Para disponibilizar uma versão temporária de teste usando somente o GitHub,
+consulte [CODESPACES.md](CODESPACES.md). O Codespace instala o projeto, prepara
+a base pública inicial e encaminha a porta 3000 automaticamente.
+
 Para sincronizar manualmente:
 
 ```bash

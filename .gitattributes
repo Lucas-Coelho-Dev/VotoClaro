@@ -1,0 +1,4 @@
+seed/*.tar.gz binary
+.devcontainer/*.sh text eol=lf
+.devcontainer/*.json text eol=lf
+scripts/bootstrap-codespaces.js text eol=lf

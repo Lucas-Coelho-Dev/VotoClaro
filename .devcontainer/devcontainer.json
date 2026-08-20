@@ -1,0 +1,19 @@
+{
+  "name": "VotoClaro — teste público",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20-bookworm",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "VotoClaro",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    }
+  },
+  "postCreateCommand": "npm ci && npm run codespaces:bootstrap",
+  "postStartCommand": "bash .devcontainer/start-votoclaro.sh",
+  "remoteEnv": {
+    "SYNC_ON_START": "true",
+    "SYNC_PHOTOS": "false",
+    "SYNC_INTERVAL_MINUTES": "360"
+  }
+}
