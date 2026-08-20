@@ -14,6 +14,85 @@ function searchable(value) {
     .toLowerCase();
 }
 
+function canonicalOffice(value) {
+  return searchable(value).replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+const VOTER_OFFICES = new Set([
+  'presidente',
+  'governador',
+  'senador',
+  'deputado federal',
+  'deputado estadual',
+  'deputado distrital',
+]);
+
+const TICKET_RELATIONS = {
+  presidente: ['vice presidente'],
+  governador: ['vice governador'],
+  senador: ['1 suplente', '2 suplente'],
+};
+
+function isVoterFacingOffice(candidateOrOffice) {
+  const office = typeof candidateOrOffice === 'string'
+    ? candidateOrOffice
+    : candidateOrOffice?.office;
+  return VOTER_OFFICES.has(canonicalOffice(office));
+}
+
+function ticketKey(candidate) {
+  const electionId = clean(candidate?.electionId);
+  const electionUnit = clean(candidate?.electionUnit);
+  const ballotNumber = candidate?.ballotNumber;
+  if (!electionId || !electionUnit || ballotNumber === null || ballotNumber === undefined) return '';
+  return `${electionId}|${electionUnit}|${ballotNumber}`;
+}
+
+function runningMateSummary(candidate) {
+  return {
+    id: candidate.id,
+    tseId: candidate.tseId,
+    name: candidate.name,
+    ballotName: candidate.ballotName,
+    ballotNumber: candidate.ballotNumber,
+    office: candidate.office,
+    officeCode: candidate.officeCode,
+    party: candidate.party,
+    partyName: candidate.partyName,
+    partyNumber: candidate.partyNumber,
+    status: candidate.status,
+    statusDetail: candidate.statusDetail,
+    statusGroup: candidate.statusGroup,
+    photoUrl: candidate.photoUrl,
+    source: candidate.sources?.[0] || null,
+    matchMethod: 'CD_ELEICAO + SG_UE + NR_CANDIDATO + cargo relacionado',
+  };
+}
+
+function attachRunningMates(candidates = []) {
+  const byTicket = new Map();
+  for (const candidate of candidates) {
+    const key = ticketKey(candidate);
+    if (!key) continue;
+    if (!byTicket.has(key)) byTicket.set(key, []);
+    byTicket.get(key).push(candidate);
+  }
+
+  return candidates.filter(isVoterFacingOffice).map((candidate) => {
+    const primaryOffice = canonicalOffice(candidate.office);
+    const expected = TICKET_RELATIONS[primaryOffice] || [];
+    const order = new Map(expected.map((office, index) => [office, index]));
+    const runningMates = (byTicket.get(ticketKey(candidate)) || [])
+      .filter((item) => item.id !== candidate.id && order.has(canonicalOffice(item.office)))
+      .sort((left, right) => {
+        const officeOrder = order.get(canonicalOffice(left.office)) - order.get(canonicalOffice(right.office));
+        return officeOrder || left.ballotName.localeCompare(right.ballotName, 'pt-BR');
+      })
+      .map(runningMateSummary);
+    return { ...candidate, runningMates };
+  });
+}
+
 function parseInteger(value) {
   const parsed = Number.parseInt(clean(value), 10);
   return Number.isFinite(parsed) ? parsed : null;
@@ -278,6 +357,9 @@ function candidateChanges(previousCandidates = [], nextCandidates = []) {
 module.exports = {
   clean,
   searchable,
+  canonicalOffice,
+  isVoterFacingOffice,
+  attachRunningMates,
   parseBrazilianDecimal,
   statusGroup,
   sourceGeneratedAt,

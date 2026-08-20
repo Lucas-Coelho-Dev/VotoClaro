@@ -1,7 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 
-const SUMMARY_VERSION = 'thematic-v5';
+const SUMMARY_VERSION = 'thematic-v8';
 const MAX_PAGES = 350;
 const MAX_TEXT_CHARACTERS = 3_000_000;
 const MAX_PROPOSALS_PER_THEME = 3;
@@ -75,6 +75,27 @@ const LOW_VALUE_PATTERNS = [
   /\.{5,}/,
 ];
 
+// Prefixes and first terms that normally keep a real hyphen in Portuguese.
+// Everything else separated specifically by a PDF line break is treated as a
+// word interrupted by layout (for example, "infraestru-\ntura").
+const PRESERVED_HYPHEN_PREFIXES = new Set([
+  'afro', 'agro', 'alem', 'alto', 'anglo', 'anti', 'auto', 'baixo', 'bem', 'co', 'contra',
+  'curto', 'extra', 'franco', 'greco', 'guarda', 'ibero', 'infra', 'inter', 'intra',
+  'latino', 'livre', 'longo', 'luso', 'macro', 'mais', 'materia', 'materias', 'meio', 'micro',
+  'mini', 'multi', 'nao', 'neo', 'pos', 'pre', 'pro', 'pseudo', 'publico', 'recem', 'salario',
+  'semi', 'sem', 'socio', 'social', 'sub', 'super', 'supra', 'tecnico', 'ultra', 'vice',
+]);
+
+const PRESERVED_HYPHEN_CLITICS = new Set([
+  'a', 'as', 'la', 'las', 'lhe', 'lhes', 'lo', 'los', 'me', 'na', 'nas', 'no', 'nos', 'o', 'os', 'se', 'te', 'vos',
+]);
+
+const PRESERVED_EX_HYPHEN_TARGETS = new Set([
+  'aluno', 'aluna', 'candidato', 'candidata', 'companheiro', 'companheira', 'deputado', 'deputada',
+  'diretor', 'diretora', 'governador', 'governadora', 'marido', 'ministro', 'ministra', 'mulher',
+  'prefeito', 'prefeita', 'presidente', 'secretario', 'secretaria', 'senador', 'senadora', 'socio', 'socia',
+]);
+
 function searchable(value) {
   return String(value || '')
     .normalize('NFD')
@@ -85,13 +106,65 @@ function searchable(value) {
     .trim();
 }
 
+function normalizedWord(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function joinPdfHyphenatedWord(left, right) {
+  const preserveHyphen = PRESERVED_HYPHEN_PREFIXES.has(normalizedWord(left))
+    || PRESERVED_HYPHEN_CLITICS.has(normalizedWord(right))
+    || (normalizedWord(left) === 'ex' && PRESERVED_EX_HYPHEN_TARGETS.has(normalizedWord(right)));
+  return preserveHyphen ? `${left}-${right}` : `${left}${right}`;
+}
+
 function normalizePdfText(value) {
   return String(value || '')
+    .normalize('NFC')
+    // Keep line breaks, but discard codes that cannot represent visible text.
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
+    .replace(/[\p{Cf}\p{Co}\uFFFD\uFFF0-\uFFFF]/gu, ' ')
+    .replace(/\r\n?/g, '\n')
+    .replace(/(\p{Lu}{2,})-[ \t]*\n[ \t]*(\p{Lu}{2,})/gu, '$1$2')
+    .replace(/(\p{L}[\p{L}\p{M}]{1,})-[ \t]*\n[ \t]*(\p{Ll}[\p{L}\p{M}]*)/gu,
+      (match, left, right) => joinPdfHyphenatedWord(left, right))
     .replace(/(?<![A-ZÀ-ÖØ-Ý])[A-ZÀ-ÖØ-Ý](?: [A-ZÀ-ÖØ-Ý])+(?![A-ZÀ-ÖØ-Ý])/gu, (match) => match.replace(/ /g, ''))
     .replace(/[\t\f\v]+/g, ' ')
     .replace(/ +/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function cleanSentenceStart(value) {
+  return String(value || '')
+    .replace(/^\s*(?:(?:[-–—•·▪◦●■□]+)|(?:\(?\d{1,3}(?:(?:[.)]|[-–—])\s*|\s+(?=[A-ZÀ-ÖØ-Ý]))))+\s*/u, '')
+    .replace(/^\d{1,2}\s+(?!(?:anos?|bilh(?:ão|ões)|dias?|meses?|mil|milh(?:ão|ões)|por cento|reais?)\b)/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function startsAtCompletePoint(value) {
+  const significant = String(value || '').replace(/^[\s\p{P}\p{S}]+/u, '');
+  if (!significant) return false;
+  if (/^\p{N}/u.test(significant) || /^e-[A-ZÀ-ÖØ-Ý]/u.test(significant)) return true;
+  const firstLetter = significant.match(/\p{L}/u)?.[0];
+  return Boolean(firstLetter) && firstLetter === firstLetter.toLocaleUpperCase('pt-BR');
+}
+
+function endsAtCompletePoint(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  return !/\b(?:a|as|com|da|das|de|do|dos|e|em|entre|o|os|para|pela|pelas|pelo|pelos|por|que|um|uma)$/iu.test(text);
+}
+
+function capitalizeInitial(value) {
+  const text = String(value || '');
+  const match = text.match(/\p{L}/u);
+  if (!match || match.index === undefined) return text;
+  const initial = match[0].toLocaleUpperCase('pt-BR');
+  return `${text.slice(0, match.index)}${initial}${text.slice(match.index + match[0].length)}`;
 }
 
 function collapseDuplicatedLine(value) {
@@ -119,30 +192,51 @@ function themeHits(normalizedSentence) {
 function sentenceCandidates(text) {
   const normalizedText = normalizePdfText(text);
   if (!normalizedText) return [];
-  return normalizedText.replace(/\n+/g, ' ')
-    .split(/(?<=[.!?;])\s+(?=[A-ZÀ-ÖØ-Ý0-9])|\s+[•·]\s+/u)
-    .map((sentence) => sentence.replace(/^[-–—•·\d.)\s]+/, '').replace(/\s+/g, ' ').trim())
+  return normalizedText
+    .split(/(?<=[.!?;])\s+(?=[A-ZÀ-ÖØ-Ý0-9])|\n+(?=\s*\d{1,3}\s+[A-ZÀ-ÖØ-Ý])|\s+[•·]\s+/u)
+    .map((sentence) => cleanSentenceStart(sentence.replace(/\n+/g, ' ')))
     .filter((sentence) => sentence.length >= 45 && sentence.length <= 520)
+    // A lowercase beginning usually means the page started in the middle of a sentence.
+    .filter(startsAtCompletePoint)
+    // A connector left at the end usually means the sentence continued on the next page.
+    .filter(endsAtCompletePoint)
     .filter((sentence) => !LOW_VALUE_PATTERNS.some((pattern) => pattern.test(sentence)));
 }
 
-function cleanSectionTitle(value) {
+function cleanPdfLine(value) {
   return normalizePdfText(value)
     .replace(/^[-–—•·\s]+/, '')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 110);
+    .trim();
+}
+
+function cleanSectionTitle(value) {
+  return cleanPdfLine(value).slice(0, 110);
+}
+
+function removePageNumberSuffix(value, pageNumber) {
+  const text = cleanPdfLine(value);
+  const digits = String(Number(pageNumber) || '').split('').filter(Boolean);
+  if (!digits.length) return text;
+  const spacedPageNumber = digits.join('\\s*');
+  return text.replace(new RegExp(`\\s+${spacedPageNumber}\\s*$`, 'u'), '').trim();
 }
 
 function pageLines(page) {
+  let lines;
   if (Array.isArray(page.lines) && page.lines.length) {
-    return page.lines
-      .map((line) => ({ text: cleanSectionTitle(line.text), fontSize: Number(line.fontSize) || 0 }))
+    lines = page.lines
+      .map((line) => ({ text: removePageNumberSuffix(line.text, page.page), fontSize: Number(line.fontSize) || 0 }))
+      .filter((line) => line.text);
+  } else {
+    lines = normalizePdfText(page.text).split(/\n+/)
+      .map((text) => ({ text: cleanPdfLine(text), fontSize: 0 }))
       .filter((line) => line.text);
   }
-  return normalizePdfText(page.text).split(/\n+/)
-    .map((text) => ({ text: cleanSectionTitle(text), fontSize: 0 }))
-    .filter((line) => line.text);
+  return lines.filter((line, index) => !(
+    /^\d{1,3}$/.test(line.text)
+    && (index < 2 || index >= lines.length - 2)
+  ));
 }
 
 function median(values) {
@@ -202,7 +296,7 @@ function sentenceRecordsForPage(page, inheritedSection, recurring) {
   const records = [];
   const flush = () => {
     if (!buffer.length) return;
-    for (const sentence of sentenceCandidates(buffer.join(' '))) records.push({ sentence, section });
+    for (const sentence of sentenceCandidates(buffer.join('\n'))) records.push({ sentence, section });
     buffer = [];
   };
   const commitHeading = () => {
@@ -211,6 +305,11 @@ function sentenceRecordsForPage(page, inheritedSection, recurring) {
     headingBuffer = [];
   };
   for (const line of lines) {
+    if (recurring.has(searchable(line.text))) {
+      flush();
+      headingBuffer = [];
+      continue;
+    }
     if (isLikelySectionHeading(line, medianFontSize, recurring)) {
       flush();
       headingBuffer.push(line.text);
@@ -255,7 +354,8 @@ function similarity(left, right) {
 }
 
 function displayPoint(sentence) {
-  const cleaned = sentence.replace(/^(OBJETIVO|META|PROPOSTA|A[CÇ][AÃ]O)\s+/i, '').replace(/\s+/g, ' ').trim();
+  const withoutLabel = sentence.replace(/^(OBJETIVO|META|PROPOSTA|A[CÇ][AÃ]O)\s+(?!(?:da|das|de|do|dos)\b)/i, '');
+  const cleaned = capitalizeInitial(cleanSentenceStart(withoutLabel));
   if (cleaned.length <= 420) return cleaned;
   const shortened = cleaned.slice(0, 417);
   const boundary = Math.max(shortened.lastIndexOf(';'), shortened.lastIndexOf('.'), shortened.lastIndexOf(','));
@@ -343,6 +443,7 @@ function summarizeExtractedPages(pages, metadata = {}) {
       maxProposalsPerTheme: MAX_PROPOSALS_PER_THEME,
       sectionRule: 'O capítulo ou seção só é informado quando um título reconhecível aparece antes do trecho na mesma página extraída; caso contrário, apenas a página é exibida.',
       missingRule: 'NOT_IDENTIFIED significa que o classificador não encontrou um trecho com tema e linguagem de proposta, não que o candidato não possua posição sobre o assunto.',
+      textNormalizationRule: 'A exibição remove códigos inválidos de fonte, recompõe palavras interrompidas por quebra de linha e descarta fragmentos que começam no meio de uma frase. O conteúdo político não é reescrito.',
     },
   };
 }

@@ -26,11 +26,13 @@ module.exports = Object.freeze({
   environment: process.env.NODE_ENV || 'development',
   databaseUrl: process.env.DATABASE_URL || '',
   databaseSsl: booleanFromEnv('DATABASE_SSL', process.env.NODE_ENV === 'production'),
+  // SYNC_ON_START faz apenas a carga inicial de um armazenamento vazio.
+  // Se já existe uma base persistida, o servidor a utiliza imediatamente.
   syncOnStart: booleanFromEnv('SYNC_ON_START', true),
   syncPhotos: booleanFromEnv('SYNC_PHOTOS', true),
   photoSyncConcurrency: integerFromEnv('PHOTO_SYNC_CONCURRENCY', 3, 1),
   maxCandidatePhotoBytes: integerFromEnv('MAX_CANDIDATE_PHOTO_BYTES', 5 * 1024 * 1024, 32 * 1024),
-  syncIntervalMinutes: integerFromEnv('SYNC_INTERVAL_MINUTES', 120, 15),
+  syncIntervalMinutes: integerFromEnv('SYNC_INTERVAL_MINUTES', 360, 15),
   requestTimeoutMs: integerFromEnv('SOURCE_TIMEOUT_MS', 120000, 5000),
   maxDownloadBytes: integerFromEnv('MAX_DOWNLOAD_BYTES', 250 * 1024 * 1024, 1024 * 1024),
   snapshotRetention: integerFromEnv('SNAPSHOT_RETENTION', 10, 2),

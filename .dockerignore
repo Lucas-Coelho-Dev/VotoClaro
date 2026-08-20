@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+!.env.free.example
+node_modules
+npm-debug.log*
+data
+data-production
+scratch
+*.tmp
+*.log
+database.json

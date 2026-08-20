@@ -17,7 +17,7 @@ const pages = [
 test('organiza propostas nos nove temas fixos e preserva capítulo e página', () => {
   const summary = summarizeExtractedPages(pages, { pages: 40 });
   assert.equal(summary.available, true);
-  assert.equal(summary.version, 'thematic-v5');
+  assert.equal(summary.version, 'thematic-v8');
   assert.equal(summary.themeSummaries.length, 9);
   assert.deepEqual(summary.themeSummaries.map((theme) => theme.label), THEMES.map((theme) => theme.label));
   assert.equal(summary.themeSummaries.every((theme) => theme.status === 'FOUND'), true);
@@ -93,4 +93,95 @@ test('informa ausência quando não existe texto suficiente', () => {
 
 test('corrige títulos extraídos com letras artificialmente espaçadas', () => {
   assert.equal(normalizePdfText('P L A N O   D E   G O V E R N O'), 'PLANO DE GOVERNO');
+});
+
+test('remove códigos de fonte inválidos sem apagar o texto legível', () => {
+  assert.equal(
+    normalizePdfText('\u001f\u001e\u001d\u001c Bolsa Família para crianças e adolescentes.'),
+    'Bolsa Família para crianças e adolescentes.',
+  );
+});
+
+test('remove número de página isolado antes do primeiro parágrafo', () => {
+  const summary = summarizeExtractedPages([{
+    page: 24,
+    text: '24\n\u001f\u001e\u001d\nBolsa Família para crianças e adolescentes, com proposta de ampliar creches, fortalecer a educação e a proteção social.',
+  }], { pages: 24 });
+  const protection = summary.themeSummaries.find((theme) => theme.id === 'protecao-social');
+  assert.equal(protection.proposalCount, 1);
+  assert.match(protection.proposals[0].text, /^Bolsa Família/);
+});
+
+test('recompõe palavras quebradas entre linhas e preserva hífens semânticos', () => {
+  assert.equal(
+    normalizePdfText('Modernizar a infraestru-\ntura, apoiar pré-\nescolas e parcerias público-\nprivadas.'),
+    'Modernizar a infraestrutura, apoiar pré-escolas e parcerias público-privadas.',
+  );
+  assert.equal(normalizePdfText('Vamos empregá-\nlas com responsabilidade.'), 'Vamos empregá-las com responsabilidade.');
+});
+
+test('não publica fragmento iniciado no meio da frase e capitaliza o ponto exibido', () => {
+  const summary = summarizeExtractedPages([
+    { page: 1, text: 'de longo prazo, vamos ampliar hospitais, modernizar a saúde e reduzir a fila de atendimento em todo o estado.' },
+    { page: 2, text: 'PROPOSTA ampliar hospitais, fortalecer a saúde e reduzir a fila de atendimento em todas as regiões.' },
+  ], { pages: 2 });
+  const health = summary.themeSummaries.find((theme) => theme.id === 'saude');
+  assert.equal(health.proposalCount, 1);
+  assert.equal(health.proposals[0].page, 2);
+  assert.match(health.proposals[0].text, /^Ampliar hospitais/);
+  assert.match(summary.methodology.textNormalizationRule, /conteúdo político não é reescrito/i);
+});
+
+test('não publica frase interrompida no fim da página', () => {
+  const summary = summarizeExtractedPages([
+    { page: 10, text: 'Vamos ampliar obras de infraestrutura, transporte público, saneamento, escolas e' },
+    { page: 11, text: 'Vamos ampliar obras de infraestrutura, transporte público e saneamento em todas as regiões.' },
+  ], { pages: 11 });
+  const mobility = summary.themeSummaries.find((theme) => theme.id === 'mobilidade-infraestrutura');
+  assert.equal(mobility.proposalCount, 1);
+  assert.equal(mobility.proposals[0].page, 11);
+});
+
+test('remove numeração simples de proposta e rodapé recorrente com número da página', () => {
+  const footer = (page) => ({ text: `LIVROAMARELO - MISSÃO 2 0 2 6 ${String(page).split('').join(' ')}`, fontSize: 7 });
+  const summary = summarizeExtractedPages([
+    { page: 44, lines: [footer(44), { text: 'Texto histórico sem linguagem de proposta suficiente para classificação.', fontSize: 10.5 }] },
+    { page: 45, lines: [footer(45), { text: 'Outro registro contextual sem uma proposta temática identificável.', fontSize: 10.5 }] },
+    { page: 46, lines: [
+      footer(46),
+      { text: '10 Proteção das fronteiras propõe uma estratégia integrada com presença estatal permanente, cooperação internacional e proteção social nas regiões fronteiriças.', fontSize: 10.5 },
+    ] },
+  ], { pages: 46 });
+  const protection = summary.themeSummaries.find((theme) => theme.id === 'protecao-social');
+  assert.equal(protection.proposalCount, 1);
+  assert.match(protection.proposals[0].text, /^Proteção das fronteiras/);
+  assert.equal(protection.proposals[0].section, null);
+});
+
+test('recompõe acrônimo e diferencia ex-presidente de palavra quebrada', () => {
+  assert.equal(normalizePdfText('tecnologia SIS-\nFRON'), 'tecnologia SISFRON');
+  assert.equal(
+    normalizePdfText('o poder ex-\necutivo e o ex-\npresidente'),
+    'o poder executivo e o ex-presidente',
+  );
+});
+
+test('remove numeração que aparece depois do rótulo proposta', () => {
+  const summary = summarizeExtractedPages([{
+    page: 35,
+    text: 'PROPOSTA 15 déficit habitacional e informalidade do trabalho exigem criar um programa de infraestrutura e geração de emprego.',
+  }], { pages: 35 });
+  const economy = summary.themeSummaries.find((theme) => theme.id === 'emprego-economia');
+  assert.equal(economy.proposalCount, 1);
+  assert.match(economy.proposals[0].text, /^Déficit habitacional/);
+});
+
+test('separa item numerado que vem depois de uma introdução terminada em dois-pontos', () => {
+  const summary = summarizeExtractedPages([{
+    page: 46,
+    text: 'A recuperação da soberania passa por alguns pilares. São eles:\n6 Proposta de retomada territorial pretende fortalecer a segurança pública e combater o crime organizado.',
+  }], { pages: 46 });
+  const security = summary.themeSummaries.find((theme) => theme.id === 'seguranca-publica-crime-organizado');
+  assert.equal(security.proposalCount, 1);
+  assert.match(security.proposals[0].text, /^Proposta de retomada territorial/);
 });

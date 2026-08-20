@@ -11,12 +11,15 @@ async function start() {
     console.log(`Persistência: ${store.backend}`);
   });
 
-  if (config.syncOnStart) {
+  const hasPersistedSnapshot = Boolean(store.getSnapshot());
+  if (config.syncOnStart && !hasPersistedSnapshot) {
     synchronizer.synchronize('startup').then((meta) => {
       console.log(`Sincronização concluída: ${meta.candidateCount} candidaturas oficiais.`);
     }).catch((error) => {
       console.error('Falha na sincronização inicial:', error.message);
     });
+  } else if (hasPersistedSnapshot) {
+    console.log('Base persistida carregada; nenhuma sincronização de inicialização foi necessária.');
   }
 
   timer = setInterval(() => {

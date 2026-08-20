@@ -25,7 +25,7 @@ const state = {
   popularCandidates: [],
   candidateCache: new Map(),
   compareIds: [],
-  filters: { q: '', office: '', uf: '', party: '', status: '' },
+  filters: { q: '', office: '', uf: '', party: '', ideology: '' },
   snapshot: null,
   retryTimer: null,
   hasSearched: false,
@@ -91,10 +91,15 @@ function cacheElements() {
     useLocation: byId('useLocation'),
     locationStatus: byId('locationStatus'),
     partyFilter: byId('partyFilter'),
-    statusFilter: byId('statusFilter'),
+    ideologyFilter: byId('ideologyFilter'),
     candidateDialog: byId('candidateDialog'),
     candidateDetail: byId('candidateDetail'),
     compareCount: byId('compareCount'),
+    colinhaNavCount: byId('colinhaNavCount'),
+    colinhaProgress: byId('colinhaProgress'),
+    colinhaProgressTitle: byId('colinhaProgressTitle'),
+    colinhaProgressText: byId('colinhaProgressText'),
+    colinhaProgressBar: byId('colinhaProgressBar'),
     comparisonContent: byId('comparisonContent'),
     colinhaSlots: byId('colinhaSlots'),
     sourceGrid: byId('sourceGrid'),
@@ -117,9 +122,9 @@ function bindEvents() {
   });
   elements.useLocation.addEventListener('click', useCurrentLocation);
   byId('clearFilters').addEventListener('click', clearFilters);
-  byId('mobileColinhaShortcut').addEventListener('click', () => {
-    document.querySelector('.side-column').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
+  byId('mobileColinhaShortcut').addEventListener('click', openColinha);
+  byId('continueColinha').addEventListener('click', openColinha);
+  document.querySelector('[data-colinha-nav]').addEventListener('click', openColinha);
   byId('backToCandidates').addEventListener('click', () => {
     elements.filterForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
@@ -127,7 +132,7 @@ function bindEvents() {
   elements.nextPage.addEventListener('click', () => changePage(1));
   byId('clearComparison').addEventListener('click', () => { state.compareIds = []; updateCompareCount(); renderComparison(); renderCandidates(); });
   byId('clearColinha').addEventListener('click', clearColinha);
-  byId('printColinha').addEventListener('click', () => window.print());
+  byId('copyColinha').addEventListener('click', copyColinha);
   document.querySelector('[data-close-dialog]').addEventListener('click', () => elements.candidateDialog.close());
   elements.candidateDialog.addEventListener('click', (event) => {
     if (event.target === elements.candidateDialog) elements.candidateDialog.close();
@@ -141,10 +146,23 @@ function bindEvents() {
   });
 }
 
+function openColinha() {
+  if (state.view !== 'explore') switchView('explore');
+  if (window.matchMedia('(max-width: 640px)').matches) {
+    document.querySelectorAll('.main-nav .nav-link').forEach((button) => {
+      button.classList.toggle('active', button.hasAttribute('data-colinha-nav'));
+    });
+  }
+  window.setTimeout(() => {
+    document.querySelector('.side-column')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 50);
+}
+
 function switchView(view) {
   state.view = view;
   document.querySelectorAll('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
   document.querySelectorAll('[data-view-target]').forEach((button) => button.classList.toggle('active', button.dataset.viewTarget === view));
+  document.querySelector('[data-colinha-nav]')?.classList.remove('active');
   if (view === 'compare') renderComparison();
   if (view === 'sources') loadSources();
   if (view === 'changes') loadChanges();
@@ -192,13 +210,13 @@ function readFilters() {
     office: elements.officeFilter.value,
     uf: elements.stateFilter.value,
     party: elements.partyFilter.value,
-    status: elements.statusFilter.value,
+    ideology: elements.ideologyFilter.value,
   };
 }
 
 function clearFilters() {
   elements.filterForm.reset();
-  state.filters = { q: '', office: '', uf: '', party: '', status: '' };
+  state.filters = { q: '', office: '', uf: '', party: '', ideology: '' };
   state.page = 1;
   state.hasSearched = false;
   renderPopularCandidates();
@@ -332,6 +350,35 @@ function avatarHtml(candidate) {
   return `<img class="avatar avatar-image" src="${escapeHtml(candidate.photoUrl)}" alt="Foto oficial de ${escapeHtml(candidate.ballotName)}" data-fallback="${fallback}" width="56" height="56" loading="lazy" decoding="async">`;
 }
 
+function partyMarkHtml(candidate, compact = false) {
+  const party = String(candidate.party || '?').toUpperCase().slice(0, 8);
+  const number = candidate.partyNumber ?? '—';
+  const title = `Identificação visual do partido ${party}${number !== '—' ? `, número ${number}` : ''}, nas cores da legenda`;
+  const source = candidate.partyImageUrl || `/api/v1/parties/${encodeURIComponent(candidate.party || 'SEM-PARTIDO')}/mark.svg?v=2`;
+  return `<img class="party-mark-image ${compact ? 'compact' : ''}" src="${escapeHtml(source)}" alt="${escapeHtml(title)}" title="${escapeHtml(title)}" width="43" height="43" loading="lazy" decoding="async">`;
+}
+
+function partyIdeologyLabel(candidate, detailed = false) {
+  const ideology = candidate.partyIdeology;
+  if (!ideology) return 'Sem classificação';
+  if (detailed && ideology.score !== null) return `${ideology.detailedLabel} (${String(ideology.score).replace('.', ',')})`;
+  return ideology.bucketLabel || 'Sem classificação';
+}
+
+function ideologyPillHtml(candidate) {
+  const ideology = candidate.partyIdeology;
+  if (!ideology) return '';
+  const title = `${partyIdeologyLabel(candidate, true)} na pesquisa acadêmica do partido. Não classifica individualmente a candidatura.`;
+  return `<span class="meta-pill ideology-pill" title="${escapeHtml(title)}">Partido: ${escapeHtml(partyIdeologyLabel(candidate))}</span>`;
+}
+
+function runningMateLabel(candidate) {
+  const runningMates = Array.isArray(candidate.runningMates) ? candidate.runningMates : [];
+  if (!runningMates.length) return '';
+  const prefix = String(candidate.office || '').toUpperCase() === 'SENADOR' ? 'Suplentes' : 'Vice';
+  return `${prefix}: ${runningMates.map((item) => item.ballotName).join(' · ')}`;
+}
+
 function candidateCard(candidate) {
   const selected = state.compareIds.includes(candidate.id);
   return `
@@ -344,13 +391,16 @@ function candidateCard(candidate) {
             <p>${escapeHtml(candidate.name)}</p>
             <div class="ballot-number">${candidate.ballotNumber ?? '—'}</div>
           </div>
+          ${partyMarkHtml(candidate)}
         </div>
         <div class="candidate-meta">
           <span class="meta-pill">${escapeHtml(candidate.office)}</span>
           <span class="meta-pill">${escapeHtml(candidate.party || 'Sem sigla')}</span>
           <span class="meta-pill">${escapeHtml(candidate.uf || 'BR')}</span>
+          ${ideologyPillHtml(candidate)}
           <span class="status-pill ${statusClass(candidate.statusGroup)}">${escapeHtml(statusLabel(candidate.statusGroup, candidate.status))}</span>
         </div>
+        ${runningMateLabel(candidate) ? `<div class="ticket-line">${escapeHtml(runningMateLabel(candidate))}</div>` : ''}
         <div class="official-line">Registro oficial TSE 2026</div>
       </button>
       <div class="candidate-actions">
@@ -370,7 +420,7 @@ function popularCandidateCard(candidate, index) {
         ${avatarHtml(candidate)}
         <div class="popular-ident">
           <h4 title="${escapeHtml(candidate.ballotName)}">${escapeHtml(candidate.ballotName)}</h4>
-          <p>${escapeHtml(candidate.office)} · ${escapeHtml(candidate.party || 'Sem sigla')} · ${escapeHtml(candidate.uf || 'BR')}</p>
+          <div class="popular-party">${partyMarkHtml(candidate, true)}<p>${escapeHtml(candidate.office)} · ${escapeHtml(candidate.party || 'Sem sigla')} · ${escapeHtml(candidate.uf || 'BR')}</p></div>
           <span class="popular-count">${countLabel}</span>
         </div>
       </button>
@@ -523,21 +573,29 @@ function renderCandidateDetail(candidate, snapshot) {
   const governmentPlan = planEligible
     ? `<section class="detail-section"><h3>Propostas para o mandato</h3><div id="governmentPlanData"><div class="not-published"><strong>Documento entregue ao TSE.</strong><br>O vínculo usa o identificador oficial desta candidatura.<br><button class="secondary-button" type="button" data-load-government-plan="${escapeHtml(candidate.id)}">Ver resumo e plano oficial</button></div></div></section>`
     : `<section class="detail-section"><h3>Propostas para o mandato</h3><div class="not-published">O conjunto “Propostas de governo” do TSE é publicado para candidaturas a presidente e governador. Para os demais cargos, não atribuímos documentos por aproximação.</div></section>`;
+  const ticketEligible = ['PRESIDENTE', 'GOVERNADOR', 'SENADOR'].includes(String(candidate.office || '').toUpperCase());
+  const runningMates = Array.isArray(candidate.runningMates) ? candidate.runningMates : [];
+  const ticket = ticketEligible
+    ? `<section class="detail-section"><h3>Chapa registrada</h3><p class="method-note">Vice e suplentes são vinculados somente quando coincidem eleição, unidade eleitoral, número e cargo relacionado no arquivo do TSE.</p>${runningMates.length
+      ? `<div class="ticket-members">${runningMates.map((member) => `<article class="ticket-member">${avatarHtml(member)}<div><small>${escapeHtml(member.office)}</small><strong>${escapeHtml(member.ballotName)}</strong><span>${escapeHtml(member.name)}</span><div class="ticket-party">${partyMarkHtml(member, true)}<span>${escapeHtml([member.party, member.partyName].filter(Boolean).join(' — '))}</span></div><span class="status-pill ${statusClass(member.statusGroup)}">${escapeHtml(statusLabel(member.statusGroup, member.status))}</span></div></article>`).join('')}</div>`
+      : '<div class="not-published">Ainda não encontramos integrante relacionado por essa chave exata no arquivo oficial importado.</div>'}</section>`
+    : '';
   elements.candidateDetail.innerHTML = `
     <div class="detail-hero">
-      <div class="detail-hero-main">${avatarHtml(candidate)}<div><span class="status-pill ${statusClass(candidate.statusGroup)}">${escapeHtml(statusLabel(candidate.statusGroup, candidate.status))}</span><h2>${escapeHtml(candidate.ballotName)}</h2><p>${escapeHtml(candidate.name)} · ${escapeHtml(candidate.party)} · ${candidate.ballotNumber ?? 'número não publicado'}</p></div></div>
+      <div class="detail-hero-main">${avatarHtml(candidate)}<div><span class="status-pill ${statusClass(candidate.statusGroup)}">${escapeHtml(statusLabel(candidate.statusGroup, candidate.status))}</span><h2>${escapeHtml(candidate.ballotName)}</h2><p>${escapeHtml(candidate.name)} · ${escapeHtml(candidate.party)} · ${candidate.ballotNumber ?? 'número não publicado'}</p></div>${partyMarkHtml(candidate)}</div>
     </div>
     <div class="detail-body">
       <div class="provenance-banner"><span>✓ Dados reproduzidos da publicação oficial do TSE</span><span>Importado em ${formatDate(snapshot.importedAt)}</span></div>
       <div class="detail-actions"><button class="primary-button" type="button" data-colinha-candidate="${escapeHtml(candidate.id)}">Adicionar à colinha</button><button class="secondary-button" type="button" data-compare-candidate="${escapeHtml(candidate.id)}">Comparar</button></div>
       <section class="detail-section"><h3>Registro da candidatura</h3><div class="fact-grid">
         ${fact('Cargo', candidate.office)}${fact('Situação publicada', candidate.status)}${fact('Detalhe da situação', candidate.statusDetail)}
-        ${fact('Partido', [candidate.party, candidate.partyName].filter(Boolean).join(' — '))}${fact('UF / unidade eleitoral', [candidate.uf, candidate.electionUnitName].filter(Boolean).join(' — '))}${fact('Reeleição declarada', candidate.reelection ? 'Sim' : 'Não')}
+        ${fact('Partido', [candidate.party, candidate.partyName].filter(Boolean).join(' — '))}${fact('Faixa ideológica do partido', partyIdeologyLabel(candidate, true))}${fact('UF / unidade eleitoral', [candidate.uf, candidate.electionUnitName].filter(Boolean).join(' — '))}${fact('Reeleição declarada', candidate.reelection ? 'Sim' : 'Não')}
         ${fact('Ocupação', candidate.occupation)}${fact('Escolaridade', candidate.education)}${fact('Idade na posse', candidate.ageAtTakingOffice ? `${candidate.ageAtTakingOffice} anos` : '')}
         ${fact('Julgamento', candidate.judgmentStatus)}${fact('Processo de registro', candidate.registrationProcess)}${fact('Aceite da candidatura', candidate.acceptedAt)}
         ${fact('Coligação', candidate.coalition)}${fact('Federação', candidate.federation)}${fact('Código TSE', candidate.tseId)}
         ${fact('Limite oficial de gastos', candidate.maximumCampaignExpense ? formatCurrency(candidate.maximumCampaignExpense) : '')}${fact('Declarou bens', candidate.declaredAssets ? 'Sim' : 'Não informado/Não')}${fact('Inserida na urna', candidate.insertedInBallot ? 'Sim' : 'Ainda não')}
-      </div></section>
+      </div><p class="method-note ideology-method-note">A faixa ideológica se refere ao partido na pesquisa acadêmica, não à posição individual da pessoa candidata. <a href="/methodology.html#ideologia-partidaria">Ver fonte, limites e ressalvas</a>.</p></section>
+      ${ticket}
       <section class="detail-section"><h3>Bens declarados</h3>${assets}</section>
       <section class="detail-section"><h3>Financiamento da campanha</h3>${finance}</section>
       ${governmentPlan}
@@ -700,7 +758,7 @@ async function loadGovernmentPlanSummary(id, container) {
   const host = container.querySelector('[data-plan-summary-host]');
   if (!host) return;
   try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=thematic-v5`);
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=thematic-v8`);
     host.innerHTML = renderPlanSummary(payload.data);
   } catch {
     host.innerHTML = '<div class="not-published">O PDF oficial está disponível, mas o resumo automático não pôde ser produzido agora.</div>';
@@ -787,6 +845,8 @@ async function renderComparison() {
       ['Número', a.ballotNumber, b.ballotNumber],
       ['Cargo', a.office, b.office],
       ['Partido', a.party, b.party],
+      ['Faixa ideológica do partido', partyIdeologyLabel(a, true), partyIdeologyLabel(b, true)],
+      ['Chapa', runningMateLabel(a) || 'Sem vice/suplente para este cargo', runningMateLabel(b) || 'Sem vice/suplente para este cargo'],
       ['Situação', a.status, b.status],
       ['UF', a.uf, b.uf],
       ['Ocupação', a.occupation || 'Não publicado', b.occupation || 'Não publicado'],
@@ -795,7 +855,7 @@ async function renderComparison() {
       ['Despesas publicadas', a.finance ? formatCurrency(a.finance.totalExpense) : 'Ainda não publicado', b.finance ? formatCurrency(b.finance.totalExpense) : 'Ainda não publicado'],
     ];
     elements.comparisonContent.innerHTML = `<div class="compare-grid">
-      <div class="compare-cell compare-label">Campo</div><div class="compare-cell compare-head">${escapeHtml(a.ballotName)}<div class="compare-source">Fonte oficial TSE</div></div><div class="compare-cell compare-head">${escapeHtml(b.ballotName)}<div class="compare-source">Fonte oficial TSE</div></div>
+      <div class="compare-cell compare-label">Campo</div><div class="compare-cell compare-head"><div class="compare-candidate-head">${partyMarkHtml(a, true)}<span>${escapeHtml(a.ballotName)}</span></div><div class="compare-source">Fonte oficial TSE</div></div><div class="compare-cell compare-head"><div class="compare-candidate-head">${partyMarkHtml(b, true)}<span>${escapeHtml(b.ballotName)}</span></div><div class="compare-source">Fonte oficial TSE</div></div>
       ${rows.map(([label, left, right]) => `<div class="compare-cell compare-label">${escapeHtml(label)}</div><div class="compare-cell">${escapeHtml(left ?? 'Não publicado')}</div><div class="compare-cell">${escapeHtml(right ?? 'Não publicado')}</div>`).join('')}
     </div><div id="comparisonEvidence" class="comparison-evidence"><div class="mini-loading">Consultando propostas e projetos nas fontes oficiais…</div></div>`;
     const comparisonKey = state.compareIds.join('|');
@@ -812,7 +872,7 @@ async function candidateEvidence(candidate) {
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/status`)
       : Promise.resolve(null),
     planEligible
-      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=thematic-v5`)
+      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=thematic-v8`)
       : Promise.resolve(null),
     candidate.legislative
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative`)
@@ -884,18 +944,72 @@ async function addToColinhaById(id) {
   const slot = slotForCandidate(candidate, colinha);
   if (!slot) return window.alert('Esse cargo não possui espaço na colinha das Eleições Gerais de 2026.');
   if (colinha[slot] && !window.confirm(`Substituir ${colinha[slot].ballotName} por ${candidate.ballotName}?`)) return;
-  colinha[slot] = { id: candidate.id, ballotName: candidate.ballotName, ballotNumber: candidate.ballotNumber, party: candidate.party, office: candidate.office };
+  colinha[slot] = { id: candidate.id, ballotName: candidate.ballotName, ballotNumber: candidate.ballotNumber, party: candidate.party, partyName: candidate.partyName, partyNumber: candidate.partyNumber, office: candidate.office };
   saveColinha(colinha);
   if (elements.candidateDialog.open) elements.candidateDialog.close();
 }
 function removeColinhaSlot(slot) { const colinha = readColinha(); delete colinha[slot]; saveColinha(colinha); }
 function clearColinha() { if (window.confirm('Apagar todas as escolhas salvas somente neste navegador?')) saveColinha({}); }
+function colinhaPlainText() {
+  const colinha = readColinha();
+  const choices = COLINHA_ROLES.map(([key, label]) => {
+    const candidate = colinha[key];
+    if (!candidate) return `${label}: ainda não escolhido`;
+    const number = candidate.ballotNumber ?? 'número não publicado';
+    const party = candidate.party ? ` · ${candidate.party}` : '';
+    return `${label}: ${number} — ${candidate.ballotName}${party}`;
+  });
+  return [
+    'MINHA COLINHA — ELEIÇÕES 2026',
+    '',
+    ...choices,
+    '',
+    'Confira os números antes de votar. Colinha montada no VotoClaro.',
+  ].join('\n');
+}
+async function writeClipboardText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.position = 'fixed';
+  field.style.opacity = '0';
+  document.body.appendChild(field);
+  field.select();
+  field.setSelectionRange(0, field.value.length);
+  const copied = document.execCommand('copy');
+  field.remove();
+  if (!copied) throw new Error('COPY_NOT_SUPPORTED');
+}
+async function copyColinha() {
+  const button = byId('copyColinha');
+  try {
+    await writeClipboardText(colinhaPlainText());
+    button.textContent = 'Colinha copiada ✓';
+    window.setTimeout(() => { button.textContent = 'Copiar colinha'; }, 2200);
+  } catch {
+    window.prompt('Seu navegador não permitiu copiar automaticamente. Selecione e copie o texto:', colinhaPlainText());
+  }
+}
 function renderColinha() {
   const colinha = readColinha();
   elements.colinhaSlots.innerHTML = COLINHA_ROLES.map(([key, label]) => {
     const candidate = colinha[key];
-    return `<div class="colinha-slot ${candidate ? 'filled' : ''}"><div><small>${escapeHtml(label)}</small><strong>${candidate ? `${escapeHtml(candidate.ballotName)} · ${escapeHtml(candidate.ballotNumber)} · ${escapeHtml(candidate.party)}` : 'Ainda não escolhido'}</strong></div>${candidate ? `<button type="button" data-remove-slot="${key}" aria-label="Remover ${escapeHtml(candidate.ballotName)}">×</button>` : ''}</div>`;
+    return `<div class="colinha-slot ${candidate ? 'filled' : ''}">${candidate ? partyMarkHtml(candidate, true) : ''}<div><small>${escapeHtml(label)}</small><strong>${candidate ? `${escapeHtml(candidate.ballotName)} · ${escapeHtml(candidate.ballotNumber)}` : 'Ainda não escolhido'}</strong></div>${candidate ? `<button type="button" data-remove-slot="${key}" aria-label="Remover ${escapeHtml(candidate.ballotName)}">×</button>` : ''}</div>`;
   }).join('');
+  const completed = COLINHA_ROLES.filter(([key]) => Boolean(colinha[key])).length;
+  const remaining = COLINHA_ROLES.length - completed;
+  const complete = remaining === 0;
+  elements.colinhaNavCount.textContent = `${completed}/6`;
+  elements.colinhaProgress.classList.toggle('complete', complete);
+  elements.colinhaProgressTitle.textContent = complete ? 'Sua colinha está pronta: 6 de 6 escolhas' : `Sua colinha: ${completed} de 6 escolhas`;
+  elements.colinhaProgressText.textContent = complete ? 'Cartão concluído. Revise os números antes de votar.' : `Faltam ${remaining} ${remaining === 1 ? 'escolha' : 'escolhas'} para concluir seu cartão.`;
+  elements.colinhaProgressBar.style.width = `${Math.round((completed / COLINHA_ROLES.length) * 100)}%`;
+  elements.colinhaProgressBar.parentElement.setAttribute('aria-valuenow', String(completed));
+  byId('continueColinha').textContent = complete ? 'Revisar colinha' : 'Continuar minha colinha';
 }
 
 async function loadSources() {

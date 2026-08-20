@@ -17,7 +17,8 @@ const {
   initializeRuntime,
 } = require('./runtime');
 const { publicSources } = require('./sources');
-const { searchable } = require('./normalize');
+const { searchable, isVoterFacingOffice, attachRunningMates } = require('./normalize');
+const { IDEOLOGY_SOURCE, IDEOLOGY_FILTERS, getPartyIdeology, partyMarkSvg } = require('./parties');
 
 const app = express();
 app.disable('x-powered-by');
@@ -35,6 +36,9 @@ app.use(helmet({
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
+      // Em produção, força HTTPS. No acesso de teste pela rede local, o IP usa
+      // HTTP e esta diretiva faria o celular tentar baixar CSS/JS por HTTPS.
+      upgradeInsecureRequests: config.environment === 'production' ? [] : null,
     },
   },
   crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -71,6 +75,22 @@ app.use(async (request, response, next) => {
   }
 });
 
+const publicSnapshotCache = new WeakMap();
+
+function publicSnapshot(snapshot) {
+  if (publicSnapshotCache.has(snapshot)) return publicSnapshotCache.get(snapshot);
+  const directCandidates = snapshot.candidates.filter(isVoterFacingOffice);
+  const needsTicketMigration = directCandidates.some((candidate) => !Array.isArray(candidate.runningMates));
+  const candidates = needsTicketMigration ? attachRunningMates(snapshot.candidates) : directCandidates;
+  const value = {
+    ...snapshot,
+    meta: { ...snapshot.meta, candidateCount: candidates.length },
+    candidates,
+  };
+  publicSnapshotCache.set(snapshot, value);
+  return value;
+}
+
 function snapshotOrUnavailable(response) {
   const snapshot = store.getSnapshot();
   if (!snapshot) {
@@ -81,7 +101,7 @@ function snapshotOrUnavailable(response) {
     });
     return null;
   }
-  return snapshot;
+  return publicSnapshot(snapshot);
 }
 
 function candidateSummary(candidate) {
@@ -99,6 +119,8 @@ function candidateSummary(candidate) {
     party: candidate.party,
     partyName: candidate.partyName,
     partyNumber: candidate.partyNumber,
+    partyImageUrl: `/api/v1/parties/${encodeURIComponent(candidate.party || 'SEM-PARTIDO')}/mark.svg?v=2`,
+    partyIdeology: getPartyIdeology(candidate.party),
     status: candidate.status,
     statusDetail: candidate.statusDetail,
     statusGroup: candidate.statusGroup,
@@ -106,6 +128,7 @@ function candidateSummary(candidate) {
     assetTotal: candidate.assetTotal,
     assetCount: candidate.assets.length,
     finance: candidate.finance,
+    runningMates: candidate.runningMates || [],
     source: candidate.sources[0],
   };
 }
@@ -119,6 +142,7 @@ const listQuerySchema = z.object({
   office: z.string().trim().max(80).optional().default(''),
   uf: z.string().trim().max(2).optional().default(''),
   party: z.string().trim().max(30).optional().default(''),
+  ideology: z.enum(['ESQUERDA', 'CENTRO', 'DIREITA', 'NAO_CLASSIFICADO']).optional(),
   status: z.enum(['APPROVED', 'PENDING', 'DENIED', 'CANCELLED', 'WITHDRAWN', 'DECEASED']).optional(),
   page: z.coerce.number().int().min(1).max(10000).optional().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).optional().default(24),
@@ -129,7 +153,8 @@ const popularQuerySchema = z.object({
 });
 
 app.get('/api/v1/health', (request, response) => {
-  const snapshot = store.getSnapshot();
+  const storedSnapshot = store.getSnapshot();
+  const snapshot = storedSnapshot ? publicSnapshot(storedSnapshot) : null;
   const importedAt = snapshot?.meta?.importedAt || null;
   const ageHours = importedAt ? (Date.now() - new Date(importedAt).getTime()) / 3_600_000 : null;
   const stale = ageHours === null || ageHours > 36;
@@ -164,11 +189,28 @@ app.get('/api/v1/filters', (request, response) => {
   const snapshot = snapshotOrUnavailable(response);
   if (!snapshot) return;
   response.setHeader('Cache-Control', 'public, max-age=900');
+  const candidates = snapshot.candidates.filter(isVoterFacingOffice);
   response.json({
-    offices: uniqueSorted(snapshot.candidates.map((candidate) => candidate.office)),
-    states: uniqueSorted(snapshot.candidates.map((candidate) => candidate.uf)),
-    parties: uniqueSorted(snapshot.candidates.map((candidate) => candidate.party)),
+    offices: uniqueSorted(candidates.map((candidate) => candidate.office)),
+    states: uniqueSorted(candidates.map((candidate) => candidate.uf)),
+    parties: uniqueSorted(candidates.map((candidate) => candidate.party)),
+    ideologies: IDEOLOGY_FILTERS,
+    ideologyMethodology: {
+      scope: 'PARTY',
+      source: IDEOLOGY_SOURCE,
+      broadBuckets: 'Esquerda: 0–3; centro amplo: 3,01–7; direita: 7,01–10.',
+      candidateCaveat: 'A faixa descreve a posição do partido na pesquisa acadêmica e não determina a posição individual da candidatura.',
+    },
   });
+});
+
+app.get('/api/v1/parties/:party/mark.svg', (request, response) => {
+  response.set({
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Content-Type': 'image/svg+xml; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  return response.send(partyMarkSvg(request.params.party));
 });
 
 app.get('/api/v1/popular-candidates', async (request, response, next) => {
@@ -176,7 +218,7 @@ app.get('/api/v1/popular-candidates', async (request, response, next) => {
     const snapshot = snapshotOrUnavailable(response);
     if (!snapshot) return;
     const query = popularQuerySchema.parse(request.query);
-    const candidatesById = new Map(snapshot.candidates.map((candidate) => [candidate.id, candidate]));
+    const candidatesById = new Map(snapshot.candidates.filter(isVoterFacingOffice).map((candidate) => [candidate.id, candidate]));
     const aggregates = await store.getPopularCandidateViews(100);
     const data = aggregates
       .map((aggregate) => {
@@ -231,11 +273,15 @@ app.get('/api/v1/candidates', (request, response, next) => {
     const office = searchable(query.office);
     const uf = query.uf.toUpperCase();
     const party = query.party.toUpperCase();
-    const filtered = snapshot.candidates.filter((candidate) => {
-      if (q && !searchable(`${candidate.name} ${candidate.ballotName} ${candidate.ballotNumber} ${candidate.party}`).includes(q)) return false;
+    const filtered = snapshot.candidates.filter(isVoterFacingOffice).filter((candidate) => {
+      const ticketSearch = (candidate.runningMates || [])
+        .map((item) => `${item.name} ${item.ballotName} ${item.party}`)
+        .join(' ');
+      if (q && !searchable(`${candidate.name} ${candidate.ballotName} ${candidate.ballotNumber} ${candidate.party} ${ticketSearch}`).includes(q)) return false;
       if (office && searchable(candidate.office) !== office) return false;
       if (uf && candidate.uf !== uf) return false;
       if (party && candidate.party !== party) return false;
+      if (query.ideology && getPartyIdeology(candidate.party).bucket !== query.ideology) return false;
       if (query.status && candidate.statusGroup !== query.status) return false;
       return true;
     });
@@ -394,7 +440,14 @@ app.get('/api/v1/candidates/:id', (request, response) => {
   const candidate = snapshot.candidates.find((item) => item.id === request.params.id);
   if (!candidate) return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND', message: 'Candidatura não encontrada na publicação oficial atual.' });
   response.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=900');
-  return response.json({ data: candidate, snapshot: snapshot.meta });
+  return response.json({
+    data: {
+      ...candidate,
+      partyImageUrl: `/api/v1/parties/${encodeURIComponent(candidate.party || 'SEM-PARTIDO')}/mark.svg?v=2`,
+      partyIdeology: getPartyIdeology(candidate.party),
+    },
+    snapshot: snapshot.meta,
+  });
 });
 
 app.get('/api/v1/candidates/:id/legislative', async (request, response, next) => {

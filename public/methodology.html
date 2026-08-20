@@ -4,8 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Metodologia de fontes e verificação do VotoClaro.">
+  <meta name="theme-color" content="#102a43">
   <title>Metodologia — VotoClaro</title>
-  <link rel="stylesheet" href="/official.css?v=2.7.0">
+  <link rel="icon" href="/favicon.svg?v=1" type="image/svg+xml">
+  <link rel="stylesheet" href="/official.css?v=2.9.0">
 </head>
 <body>
   <main class="legal-page">
@@ -13,7 +15,7 @@
     <article class="legal-card">
       <p class="eyebrow">Auditoria aberta</p>
       <h1>Metodologia de dados</h1>
-      <p class="legal-updated">Versão de 17 de agosto de 2026</p>
+      <p class="legal-updated">Versão de 19 de agosto de 2026</p>
 
       <h2>Princípios</h2>
       <ul class="principle-list">
@@ -26,6 +28,17 @@
 
       <h2>Fonte canônica das candidaturas</h2>
       <p>A base canônica é o conjunto <a href="https://dadosabertos.tse.jus.br/dataset/candidatos-2026" rel="noopener noreferrer">Candidatos 2026 do Tribunal Superior Eleitoral</a>. O sistema importa candidaturas, bens e redes sociais declaradas a partir dos pacotes oficiais publicados no CDN do TSE.</p>
+
+      <h2>Cargos, chapas e identificação partidária</h2>
+      <p>A busca apresenta somente os cargos que recebem escolha direta na urna em 2026: deputado federal, deputado estadual ou distrital, senador, governador e presidente. A colinha reserva seis espaços porque há duas escolhas para senador. Vice-presidente, vice-governador, primeiro suplente e segundo suplente não aparecem como candidaturas independentes.</p>
+      <p>Vice e suplentes são mostrados na ficha do titular somente quando os registros coincidem em <code>CD_ELEICAO</code>, <code>SG_UE</code> e <code>NR_CANDIDATO</code>, além da relação esperada entre os cargos. Não há associação aproximada por nome ou partido. A pesquisa também considera os nomes dos integrantes vinculados para levar a pessoa à chapa titular.</p>
+      <p>A identificação partidária exibida nos cartões é uma imagem criada pelo VotoClaro com a sigla e o número presentes no arquivo oficial e as cores de referência da identidade pública de cada legenda. Ela facilita o reconhecimento visual, mas não pretende reproduzir o logotipo oficial. As cores identificam somente o partido e não são usadas para determinar ou sugerir sua posição ideológica.</p>
+
+      <h2 id="ideologia-partidaria">Classificação ideológica dos partidos</h2>
+      <p>O filtro usa a avaliação de especialistas publicada em <a href="https://doi.org/10.1590/1807-0191202531120" rel="noopener noreferrer">“O desaparecimento do centro ideológico no sistema partidário brasileiro: a classificação mais atualizada dos experts”</a>, de Bruno Bolognesi, Ednaldo Ribeiro, Adriano Codato e Glauco Peres da Silva, na revista <em>Opinião Pública</em>. A pesquisa consultou 477 cientistas políticos e brasilianistas em 2022 e posicionou os partidos numa escala de 0, extrema esquerda, a 10, extrema direita.</p>
+      <p>O artigo detalha sete intervalos: extrema esquerda (0 a 1,5), esquerda (1,51 a 3), centro-esquerda (3,01 a 4,49), centro (4,5 a 5,5), centro-direita (5,51 a 7), direita (7,01 a 8,5) e extrema direita (8,51 a 10). Para oferecer os três botões simples solicitados no portal, o VotoClaro cria apenas uma agregação de interface: <strong>esquerda</strong> reúne notas de 0 a 3; <strong>centro (faixa ampla)</strong> reúne centro-esquerda, centro e centro-direita, de 3,01 a 7; e <strong>direita</strong> reúne notas de 7,01 a 10. A ficha e a comparação preservam também a classificação detalhada e a nota.</p>
+      <p>A classificação pertence ao <strong>partido</strong> na pesquisa, não à pessoa candidata. Ela não determina opiniões, votos, alianças locais ou propostas individuais. Por isso, a interface nunca descreve alguém como “candidato de esquerda” ou “candidato de direita”; ela informa a faixa acadêmica do partido ao qual a candidatura está registrada.</p>
+      <p>Partidos criados depois do levantamento, como PRD e Missão, aparecem como “sem classificação”: o VotoClaro não calcula média de partidos antecessores nem inventa posição. Em mudanças apenas de nome, a nota anterior é mantida com a continuidade documentada pelo TSE: <a href="https://www.tse.jus.br/comunicacao/noticias/2023/Dezembro/plenario-decide-que-pmn-so-pode-manter-uma-entidade-de-direito-privado-destinada-a-pesquisa" rel="noopener noreferrer">PMN para Mobiliza</a> e <a href="https://www.tse.jus.br/partidos/partidos-registrados-no-tse/arquivos-1/tse-estatuto-do-partido-de-7-4-2025-aprovado-em-2-12.2025/%40%40display-file/file/folha_de_rosto_democrata_antigo_pmb-1.pdf" rel="noopener noreferrer">PMB para Democrata</a>. A lista e os números vigentes são conferidos no <a href="https://www.tse.jus.br/partidos/partidos-politicos/partidos-registrados-no-tse" rel="noopener noreferrer">registro de partidos do TSE</a>.</p>
 
       <h2>Periodicidade</h2>
       <p>O VotoClaro pode consultar as fontes em intervalos menores, mas a atualidade real depende da publicação de cada órgão. Os arquivos de candidaturas têm frequência informada como diária. Recursos de campanha podem ser comunicados à Justiça Eleitoral em até 72 horas após o recebimento.</p>

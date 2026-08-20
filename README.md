@@ -10,6 +10,11 @@ Portal de transparência eleitoral que importa publicações oficiais, preserva 
 - Mudanças entre versões são registradas.
 - Dados simulados, números aleatórios, processos fictícios e notas automáticas não são publicados.
 - A colinha eleitoral fica somente no navegador e não exige cadastro.
+- A busca publica somente os seis tipos de escolha direta da urna: deputado federal, deputado estadual/distrital, duas vagas de senador, governador e presidente. Vice e suplentes ficam dentro da chapa do titular.
+- O vínculo da chapa exige coincidência exata de eleição, unidade eleitoral, número e cargo relacionado; pesquisar o nome de um vice ou suplente retorna o titular correspondente.
+- O ícone partidário da interface é uma identificação visual formada pela sigla, número e cores de referência de cada legenda, sem se apresentar como reprodução do logotipo oficial.
+- Cada cartão usa essa identificação como uma imagem SVG pequena, legível e consistente, inclusive em celular.
+- O filtro de faixa ideológica usa uma pesquisa acadêmica com especialistas e classifica o partido — nunca a pessoa candidata. A opção “centro” é uma faixa ampla que reúne centro-esquerda, centro e centro-direita; partidos sem nota própria ficam sem classificação.
 - A interface é responsiva para celulares a partir de 320 px, com navegação inferior, áreas de toque ampliadas e tabelas roláveis.
 - A localização é opcional, identifica a UF no navegador com a malha oficial do IBGE e não envia nem armazena latitude ou longitude.
 - Planos de governo do TSE e até cinco projetos legislativos oficiais podem ser comparados sem notas ou recomendações automáticas.
@@ -49,7 +54,8 @@ Sem `DATABASE_URL`, somente dados públicos são armazenados em `data/latest.jso
 |---|---|
 | `GET /api/v1/health` | Saúde, idade e checksum da base |
 | `GET /api/v1/sources` | Fontes, conectores e execuções |
-| `GET /api/v1/filters` | Cargos, UFs e partidos disponíveis |
+| `GET /api/v1/filters` | Cargos, UFs, partidos e faixas ideológicas disponíveis |
+| `GET /api/v1/parties/:party/mark.svg` | Identificação visual neutra do partido em SVG |
 | `GET /api/v1/popular-candidates` | Ranking agregado e metodologia dos mais consultados |
 | `GET /api/v1/geography/states` | Malhas oficiais das UFs, sem receber coordenadas |
 | `GET /api/v1/candidates` | Busca paginada de candidaturas |
@@ -64,7 +70,7 @@ Sem `DATABASE_URL`, somente dados públicos são armazenados em `data/latest.jso
 | `GET /api/v1/changes` | Alterações detectadas entre versões |
 | `GET/POST /api/v1/admin/sync` | Sincronização protegida por segredo |
 
-Filtros de candidaturas: `q`, `office`, `uf`, `party`, `status`, `page` e `pageSize`.
+Filtros de candidaturas: `q`, `office`, `uf`, `party`, `ideology`, `status`, `page` e `pageSize`. `ideology` aceita `ESQUERDA`, `CENTRO`, `DIREITA` e `NAO_CLASSIFICADO`. Consulte a [metodologia da classificação partidária](public/methodology.html#ideologia-partidaria).
 
 ## Fontes ativas
 
@@ -92,6 +98,7 @@ public/               portal, metodologia e privacidade
 scripts/              sincronização e migração
 src/
   app.js              API e segurança HTTP
+  parties.js          números, imagem SVG e classificação acadêmica dos partidos
   config.js           configuração por ambiente
   normalize.js        transformação sem dados pessoais
   geography.js        malhas oficiais e validação das 27 UFs
@@ -118,7 +125,7 @@ npm audit
 
 ## Produção
 
-Consulte [DEPLOY.md](DEPLOY.md) e [OPERATIONS.md](OPERATIONS.md). Antes do lançamento, preencha o responsável e o canal de privacidade em `public/privacy.html`.
+Para testar publicamente sem mensalidade, consulte [DEPLOY_FREE.md](DEPLOY_FREE.md): Oracle Cloud Always Free, armazenamento persistente, Docker Compose e HTTPS automático. As alternativas pagas e os cuidados de produção ficam em [DEPLOY.md](DEPLOY.md) e [OPERATIONS.md](OPERATIONS.md). Antes do lançamento, preencha o responsável e o canal de privacidade em `public/privacy.html`.
 
 ## Licença e atribuição
 

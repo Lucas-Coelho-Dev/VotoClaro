@@ -10,6 +10,8 @@ const {
   sourceGeneratedAt,
   checksum,
   candidateChanges,
+  attachRunningMates,
+  isVoterFacingOffice,
 } = require('./normalize');
 const { enrichCandidatesWithLegislativeLinks } = require('./legislative');
 
@@ -134,16 +136,18 @@ class OfficialDataSync {
           error: error.message,
         };
       }
-      const legislative = await enrichCandidatesWithLegislativeLinks(candidates, this.config);
+      const voterCandidates = attachRunningMates(candidates);
+      const legislative = await enrichCandidatesWithLegislativeLinks(voterCandidates, this.config);
       Object.assign(statuses, legislative.statuses);
-      candidates.sort((a, b) => a.ballotName.localeCompare(b.ballotName, 'pt-BR'));
+      voterCandidates.sort((a, b) => a.ballotName.localeCompare(b.ballotName, 'pt-BR'));
 
       const previous = this.store.getSnapshot();
       const importedAt = new Date().toISOString();
       const generatedDates = candidateRows.map(sourceGeneratedAt).filter(Boolean).sort();
       const sourceGeneratedAtValue = generatedDates.at(-1) || null;
-      const coreChecksum = checksum(candidates);
-      const changes = candidateChanges(previous?.candidates || [], candidates).map((change) => ({
+      const coreChecksum = checksum(voterCandidates);
+      const previousVoterCandidates = (previous?.candidates || []).filter(isVoterFacingOffice);
+      const changes = candidateChanges(previousVoterCandidates, voterCandidates).map((change) => ({
         ...change,
         detectedAt: importedAt,
         sourceId: SOURCES.tseCandidates.id,
@@ -153,8 +157,9 @@ class OfficialDataSync {
           electionYear: 2026,
           importedAt,
           sourceGeneratedAt: sourceGeneratedAtValue,
-          candidateCount: candidates.length,
-          photoCount: candidates.filter((candidate) => candidate.photoUrl).length,
+          candidateCount: voterCandidates.length,
+          relatedCandidateCount: voterCandidates.reduce((total, candidate) => total + candidate.runningMates.length, 0),
+          photoCount: voterCandidates.filter((candidate) => candidate.photoUrl).length,
           legislativeLinks: legislative.linked,
           checksum: coreChecksum,
           trigger,
@@ -162,7 +167,7 @@ class OfficialDataSync {
         },
         sourceStatuses: statuses,
         changes,
-        candidates,
+        candidates: voterCandidates,
       };
       await this.store.saveSnapshot(snapshot);
       await this.store.recordRun({
@@ -170,7 +175,7 @@ class OfficialDataSync {
         status: 'SUCCESS',
         startedAt,
         finishedAt: importedAt,
-        recordCount: candidates.length,
+        recordCount: voterCandidates.length,
       });
       return snapshot.meta;
     } catch (error) {

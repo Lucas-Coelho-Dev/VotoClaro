@@ -5,10 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="VotoClaro — candidaturas das Eleições 2026 com dados oficiais, fonte, data e histórico de atualização.">
   <meta name="theme-color" content="#102a43">
+  <meta name="application-name" content="VotoClaro">
+  <meta name="author" content="Lucas Coelho">
   <title>VotoClaro — Eleições 2026 com fonte</title>
-  <link rel="stylesheet" href="/official.css?v=2.7.0">
+  <link rel="icon" href="/favicon.svg?v=1" type="image/svg+xml">
+  <link rel="author" href="https://github.com/Lucas-Coelho-Dev">
+  <link rel="stylesheet" href="/official.css?v=2.9.3">
   <script src="/geolocation.js?v=2.1.0" defer></script>
-  <script src="/official.js?v=2.7.0" defer></script>
+  <script src="/official.js?v=2.9.5" defer></script>
 </head>
 <body class="portal-page">
   <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
@@ -22,8 +26,9 @@
       <nav class="main-nav" aria-label="Navegação principal">
         <button class="nav-link active" type="button" data-view-target="explore">Candidaturas</button>
         <button class="nav-link" type="button" data-view-target="compare">Comparar <span id="compareCount" class="nav-count">0</span></button>
-        <button class="nav-link" type="button" data-view-target="changes">Atualizações</button>
-        <button class="nav-link" type="button" data-view-target="sources">Fontes</button>
+        <button class="nav-link desktop-only-nav" type="button" data-view-target="changes">Atualizações</button>
+        <button class="nav-link desktop-only-nav" type="button" data-view-target="sources">Fontes</button>
+        <button class="nav-link mobile-only-nav" type="button" data-colinha-nav>Colinha <span id="colinhaNavCount" class="nav-count">0/6</span></button>
       </nav>
       <div id="healthBadge" class="health-badge is-loading" role="status">
         <span class="health-dot"></span><span>Verificando dados</span>
@@ -37,7 +42,7 @@
         <div>
           <p class="eyebrow">Transparência eleitoral rastreável</p>
           <h1>Antes de escolher, confira a fonte.</h1>
-          <p class="hero-copy">Candidaturas publicadas pela Justiça Eleitoral, sem notas inventadas, estimativas ou acusações automáticas.</p>
+          <p class="hero-copy">Seu voto decide o que vem depois. Conheça as candidaturas, compare propostas e monte sua colinha com informação de fonte — sem achismo.</p>
         </div>
         <div class="hero-proof" aria-label="Compromissos de dados">
           <div><strong id="candidateTotalHero">—</strong><span>candidaturas oficiais</span></div>
@@ -50,6 +55,18 @@
     <div id="globalNotice" class="global-notice" hidden></div>
 
     <section id="view-explore" class="view active" aria-labelledby="exploreTitle">
+      <div class="colinha-progress-shell">
+        <section id="colinhaProgress" class="colinha-progress" aria-labelledby="colinhaProgressTitle">
+          <div class="colinha-progress-icon" aria-hidden="true">✓</div>
+          <div class="colinha-progress-copy">
+            <p class="eyebrow">Suas 6 escolhas da urna</p>
+            <strong id="colinhaProgressTitle">Sua colinha: 0 de 6 escolhas</strong>
+            <p id="colinhaProgressText">Faltam 6 escolhas para concluir seu cartão.</p>
+            <div class="progress-track" role="progressbar" aria-label="Progresso da colinha" aria-valuemin="0" aria-valuemax="6" aria-valuenow="0"><span id="colinhaProgressBar"></span></div>
+          </div>
+          <button id="continueColinha" class="secondary-button" type="button">Continuar minha colinha</button>
+        </section>
+      </div>
       <div class="content-grid">
         <div class="primary-column">
           <div class="section-heading">
@@ -90,17 +107,17 @@
             <label><span>Cargo</span><select id="officeFilter" name="office"><option value="">Todos os cargos</option></select></label>
             <label><span>UF</span><select id="stateFilter" name="uf"><option value="">Brasil</option></select></label>
             <label><span>Partido</span><select id="partyFilter" name="party"><option value="">Todos</option></select></label>
-            <label><span>Situação</span>
-              <select id="statusFilter" name="status">
+            <label><span>Faixa do partido</span>
+              <select id="ideologyFilter" name="ideology">
                 <option value="">Todas</option>
-                <option value="APPROVED">Deferida</option>
-                <option value="PENDING">Em análise</option>
-                <option value="DENIED">Indeferida</option>
-                <option value="WITHDRAWN">Renúncia</option>
-                <option value="CANCELLED">Cancelada/cassada</option>
+                <option value="ESQUERDA">Esquerda</option>
+                <option value="CENTRO">Centro (faixa ampla)</option>
+                <option value="DIREITA">Direita</option>
+                <option value="NAO_CLASSIFICADO">Sem classificação</option>
               </select>
             </label>
             <button class="primary-button filter-button" type="submit">Buscar</button>
+            <p class="filter-method-note">Esta é uma classificação acadêmica do <strong>partido</strong>, não da pessoa. “Centro” reúne centro-esquerda, centro e centro-direita. <a href="/methodology.html#ideologia-partidaria">Entenda a metodologia</a>.</p>
           </form>
 
           <div class="results-bar">
@@ -124,10 +141,10 @@
               <div><p class="eyebrow">Privada por padrão</p><h2 id="colinhaTitle">Minha colinha</h2></div>
               <span class="local-pill">Só neste aparelho</span>
             </div>
-            <p class="muted">As escolhas ficam no seu navegador. Não pedimos CPF, endereço ou cadastro.</p>
+            <p class="muted">As seis escolhas ficam no seu navegador. Vice e suplentes aparecem dentro da chapa do titular e não ocupam outro espaço.</p>
             <div id="colinhaSlots" class="colinha-slots"></div>
             <div class="colinha-actions">
-              <button id="printColinha" class="secondary-button" type="button">Imprimir</button>
+              <button id="copyColinha" class="secondary-button" type="button">Copiar colinha</button>
               <button id="clearColinha" class="danger-text-button" type="button">Limpar</button>
             </div>
             <a class="inline-link" href="/privacy.html">Como protegemos sua privacidade</a>
@@ -180,8 +197,12 @@
   </dialog>
 
   <footer class="site-footer">
-    <div><strong>VotoClaro</strong><p>Projeto independente. Não representa o TSE nem qualquer candidatura ou partido.</p></div>
-    <nav aria-label="Links institucionais"><a href="/methodology.html">Metodologia</a><a href="/privacy.html">Privacidade</a><a href="https://dadosabertos.tse.jus.br/dataset/candidatos-2026" rel="noopener noreferrer">Dados do TSE</a></nav>
+    <div><strong>VotoClaro™</strong><p>© 2026 Lucas Coelho. Projeto e identidade visual com autoria declarada.</p><p>Projeto independente. Não representa o TSE nem qualquer candidatura ou partido.</p></div>
+    <nav aria-label="Links institucionais"><a href="/methodology.html">Metodologia</a><a href="/privacy.html">Privacidade</a><a href="https://github.com/Lucas-Coelho-Dev/VotoClaro" target="_blank" rel="author noopener noreferrer">GitHub do criador ↗</a><a href="https://dadosabertos.tse.jus.br/dataset/candidatos-2026" rel="noopener noreferrer">Dados do TSE</a></nav>
   </footer>
+  <a class="creator-watermark" href="https://github.com/Lucas-Coelho-Dev/VotoClaro" target="_blank" rel="author noopener noreferrer" aria-label="VotoClaro criado por Lucas Coelho. Abrir GitHub do projeto">
+    <img src="/favicon.svg?v=1" width="24" height="24" alt="">
+    <span><strong>VotoClaro™</strong><small>por Lucas Coelho · GitHub ↗</small></span>
+  </a>
 </body>
 </html>
