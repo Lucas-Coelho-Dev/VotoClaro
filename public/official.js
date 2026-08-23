@@ -56,6 +56,14 @@ function formatDate(value, includeTime = true) {
 function initials(name) {
   return String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
 }
+
+const PHOTO_CACHE_VERSION = 'postgres-import-1';
+
+function versionedCandidatePhotoUrl(value) {
+  const url = String(value || '');
+  if (!/^\/api\/v1\/candidates\/\d+\/photo(?:\?|$)/.test(url)) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}v=${PHOTO_CACHE_VERSION}`;
+}
 function statusClass(group) { return `status-${String(group || 'PENDING').toLowerCase()}`; }
 function statusLabel(group, raw) { return STATUS_LABELS[group] || raw || 'Em análise'; }
 
@@ -348,7 +356,7 @@ async function loadPopularCandidates() {
 function avatarHtml(candidate) {
   const fallback = escapeHtml(initials(candidate.ballotName));
   if (!candidate.photoUrl) return `<span class="avatar">${fallback}</span>`;
-  return `<img class="avatar avatar-image" src="${escapeHtml(candidate.photoUrl)}" alt="Foto oficial de ${escapeHtml(candidate.ballotName)}" data-fallback="${fallback}" width="56" height="56" loading="lazy" decoding="async">`;
+  return `<img class="avatar avatar-image" src="${escapeHtml(versionedCandidatePhotoUrl(candidate.photoUrl))}" alt="Foto oficial de ${escapeHtml(candidate.ballotName)}" data-fallback="${fallback}" width="56" height="56" loading="lazy" decoding="async">`;
 }
 
 function partyMarkHtml(candidate, compact = false) {

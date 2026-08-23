@@ -347,7 +347,7 @@ app.get('/api/v1/candidates/:id/photo', async (request, response, next) => {
     if (!candidate) return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND' });
     const photo = await store.getCandidatePhoto(candidate.id);
     if (!photo) {
-      response.setHeader('Cache-Control', 'public, max-age=1800');
+      response.setHeader('Cache-Control', 'no-store');
       return response.status(404).json({ error: 'PHOTO_NOT_PUBLISHED', message: 'A foto não consta no cache oficial importado.' });
     }
     const etagValue = photo.sha256 || crypto.createHash('sha256').update(photo.buffer).digest('hex');
