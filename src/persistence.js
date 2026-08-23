@@ -268,18 +268,25 @@ class SnapshotStore {
   async availablePhotoIds(candidateIds) {
     const wanted = new Set(candidateIds.filter((id) => /^\d+$/.test(String(id))));
     if (!wanted.size) return new Set();
+    const available = new Set();
     if (this.pool) {
       const result = await this.pool.query(
         'SELECT candidate_id FROM candidate_photos WHERE candidate_id = ANY($1::text[])',
         [[...wanted]],
       );
-      return new Set(result.rows.map((row) => row.candidate_id));
+      for (const row of result.rows) available.add(row.candidate_id);
     }
-    const entries = await fs.readdir(this.config.photoDir, { withFileTypes: true });
-    return new Set(entries
-      .filter((entry) => entry.isFile() && /^\d+\.jpg$/.test(entry.name))
-      .map((entry) => entry.name.slice(0, -4))
-      .filter((id) => wanted.has(id)));
+    try {
+      const entries = await fs.readdir(this.config.photoDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !/^\d+\.jpg$/.test(entry.name)) continue;
+        const candidateId = entry.name.slice(0, -4);
+        if (wanted.has(candidateId)) available.add(candidateId);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    return available;
   }
 
   async getCandidatePhoto(candidateId) {
@@ -289,7 +296,7 @@ class SnapshotStore {
         'SELECT content_type AS "contentType", sha256, image_data AS buffer, source_updated_at AS "sourceUpdatedAt" FROM candidate_photos WHERE candidate_id = $1',
         [candidateId],
       );
-      return result.rows[0] || null;
+      if (result.rows[0]) return result.rows[0];
     }
     try {
       const buffer = await fs.readFile(path.join(this.config.photoDir, `${candidateId}.jpg`));

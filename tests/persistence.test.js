@@ -50,3 +50,19 @@ test('rejeita identificador que não pertence ao formato público do TSE', async
   const { store } = await temporaryStore(t);
   await assert.rejects(store.recordCandidateView('../visitante'), /INVALID_CANDIDATE_ID/);
 });
+
+test('usa o cache local de foto quando o PostgreSQL ainda não possui a imagem', async (t) => {
+  const { store, config } = await temporaryStore(t);
+  const candidateId = '280002542548';
+  const expected = Buffer.from('foto-oficial');
+  await fs.writeFile(path.join(config.photoDir, `${candidateId}.jpg`), expected);
+  store.pool = {
+    query: async () => ({ rows: [] }),
+  };
+
+  const photo = await store.getCandidatePhoto(candidateId);
+
+  assert.deepEqual(photo.buffer, expected);
+  assert.equal(photo.contentType, 'image/jpeg');
+  assert.deepEqual([...await store.availablePhotoIds([candidateId])], [candidateId]);
+});
