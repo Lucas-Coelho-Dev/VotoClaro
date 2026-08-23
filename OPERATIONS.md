@@ -14,6 +14,8 @@ Monitore a cada cinco minutos:
 - disponibilidade sob demanda das malhas do IBGE e dos pacotes de propostas de governo do TSE;
 - falhas de extração textual e tempo da primeira geração dos resumos de PDF;
 - duração e memória da sincronização.
+- fila, última conclusão e última falha de `localPlanAnalysis` em `/api/v1/health`;
+- uso de memória e CPU do serviço `llm`, mantendo apenas uma análise simultânea.
 
 O portal considera os dados vencidos após 36 horas sem snapshot novo. Uma fonte vencida deve permanecer visível, com o horário real da última atualização.
 
@@ -46,7 +48,10 @@ O portal considera os dados vencidos após 36 horas sem snapshot novo. Uma fonte
 - O servidor nunca deve receber parâmetros de latitude ou longitude; `/api/v1/geography/states` entrega somente a malha das UFs.
 - A permissão de localização deve ocorrer apenas após clique e requer HTTPS fora de `localhost`.
 - PDFs de plano de governo ficam em cache técnico e são vinculados somente pelo `SQ_CANDIDATO`.
-- Resumos ficam em `data/government-plan-summaries` quando há disco persistente. Uma mudança no PDF gera outro checksum e outro resumo.
+- Resumos extrativos ficam em `data/government-plan-summaries`; análises concluídas da IA local também ficam no PostgreSQL. Uma mudança no PDF gera outro checksum e outra análise.
+- A IA local processa todas as páginas com texto em blocos, preserva página e citação, consolida por tema e trabalha em fila. Ela não deve receber porta pública.
+- Cenários de quatro anos são sempre condicionais. Um número que não esteja nas evidências do PDF não pode ser publicado.
+- Se a IA local falhar ou estiver carregando, preserve e publique o classificador extrativo atual sem interromper o portal.
 - Se a cobertura de texto for insuficiente, mantenha o PDF e não tente preencher os pontos manualmente como se fossem extraídos da fonte.
 - Projetos legislativos são consultados sob demanda. Em falha da Câmara ou do Senado, preserve a candidatura e mostre a indisponibilidade sem criar conteúdo substituto.
 

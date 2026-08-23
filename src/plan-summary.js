@@ -1,5 +1,10 @@
 const fs = require('fs/promises');
 const path = require('path');
+const { createLocalLlmSummary } = require('./plan-llm-analysis');
+const {
+  LOCAL_LLM_ANALYSIS_VERSION,
+  LOCAL_LLM_PROMPT_VERSION,
+} = require('./local-llm');
 
 const SUMMARY_VERSION = 'thematic-v8';
 const MAX_PAGES = 350;
@@ -507,12 +512,18 @@ async function extractPdfPages(buffer) {
 }
 
 class GovernmentPlanSummaryService {
-  constructor(config, governmentPlanService) {
+  constructor(config, governmentPlanService, store, localLlmClient) {
     this.config = config;
     this.governmentPlanService = governmentPlanService;
+    this.store = store;
+    this.localLlmClient = localLlmClient;
     this.directory = path.join(config.dataDir, 'government-plan-summaries');
     this.memory = new Map();
     this.pending = new Map();
+    this.llmQueue = [];
+    this.queuedLlmDocuments = new Set();
+    this.llmWorkerRunning = false;
+    this.precomputeRunning = false;
   }
 
   cachePath(sha256) {
@@ -535,23 +546,166 @@ class GovernmentPlanSummaryService {
     await fs.rename(temporary, target);
   }
 
+  async readReadyAnalysis(sha256) {
+    const stored = await this.store?.getGovernmentPlanAnalysis?.(sha256, LOCAL_LLM_ANALYSIS_VERSION);
+    if (stored?.status === 'READY' && stored.payload?.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) {
+      return stored.payload;
+    }
+    const cached = await this.readCache(sha256);
+    if (cached?.version !== SUMMARY_VERSION) return null;
+    if (!this.localLlmClient?.isEnabled() || cached.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return cached;
+    return cached;
+  }
+
+  async analysisAttempts(sha256) {
+    const stored = await this.store?.getGovernmentPlanAnalysis?.(sha256, LOCAL_LLM_ANALYSIS_VERSION);
+    return Number(stored?.attempts) || 0;
+  }
+
+  queueLocalAnalysis(candidate, sha256, fallbackSummary) {
+    if (!this.localLlmClient?.isEnabled() || this.queuedLlmDocuments.has(sha256)) return;
+    if (fallbackSummary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return;
+    this.queuedLlmDocuments.add(sha256);
+    this.llmQueue.push({ candidate, sha256, fallbackSummary });
+    setImmediate(() => this.runLlmQueue());
+  }
+
+  async runLlmQueue() {
+    if (this.llmWorkerRunning || !this.localLlmClient?.isEnabled()) return;
+    this.llmWorkerRunning = true;
+    try {
+      while (this.llmQueue.length) {
+        const job = this.llmQueue.shift();
+        try {
+          await this.processLocalAnalysis(job);
+        } catch (error) {
+          console.error(`Falha na análise local do plano ${job.sha256.slice(0, 12)}:`, error.message);
+        } finally {
+          this.queuedLlmDocuments.delete(job.sha256);
+        }
+      }
+    } finally {
+      this.llmWorkerRunning = false;
+    }
+  }
+
+  async processLocalAnalysis(job) {
+    const attempts = await this.analysisAttempts(job.sha256);
+    if (attempts >= 3) return;
+    await this.store?.saveGovernmentPlanAnalysis?.({
+      documentSha256: job.sha256,
+      analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+      status: 'PROCESSING',
+      model: this.config.localLlmModel,
+      promptVersion: LOCAL_LLM_PROMPT_VERSION,
+      attempts: attempts + 1,
+    });
+    try {
+      const plan = await this.governmentPlanService.get(job.candidate);
+      if (!plan || plan.sha256 !== job.sha256) throw new Error('O documento oficial mudou antes da análise local.');
+      const extracted = await extractPdfPages(plan.buffer);
+      const enhanced = {
+        ...await createLocalLlmSummary({
+          pages: extracted.pages,
+          fallbackSummary: job.fallbackSummary,
+          client: this.localLlmClient,
+          themes: THEMES,
+          config: this.config,
+        }),
+        documentSha256: plan.sha256,
+        source: plan.source,
+      };
+      await Promise.all([
+        this.saveCache(plan.sha256, enhanced),
+        this.store?.saveGovernmentPlanAnalysis?.({
+          documentSha256: plan.sha256,
+          analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+          status: 'READY',
+          model: this.config.localLlmModel,
+          promptVersion: LOCAL_LLM_PROMPT_VERSION,
+          payload: enhanced,
+          attempts: attempts + 1,
+        }),
+      ]);
+      this.memory.set(plan.sha256, enhanced);
+    } catch (error) {
+      await this.store?.saveGovernmentPlanAnalysis?.({
+        documentSha256: job.sha256,
+        analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+        status: 'FAILED',
+        model: this.config.localLlmModel,
+        promptVersion: LOCAL_LLM_PROMPT_VERSION,
+        error: String(error.message || error).slice(0, 1000),
+        attempts: attempts + 1,
+      });
+      throw error;
+    }
+  }
+
+  async precomputeCandidates(candidates) {
+    if (!this.config.localLlmPrecomputeOnStart || !this.localLlmClient?.isEnabled() || this.precomputeRunning) return;
+    this.precomputeRunning = true;
+    try {
+      const eligible = (Array.isArray(candidates) ? candidates : [])
+        .filter((candidate) => ['PRESIDENTE', 'GOVERNADOR'].includes(String(candidate.office || '').toUpperCase()))
+        .slice(0, this.config.localLlmPrecomputeLimit);
+      for (const candidate of eligible) {
+        try {
+          await this.get(candidate);
+        } catch (error) {
+          console.error(`Plano não preparado para ${candidate.id}:`, error.message);
+        }
+      }
+      await this.runLlmQueue();
+    } finally {
+      this.precomputeRunning = false;
+    }
+  }
+
+  getStatus() {
+    return {
+      ...this.localLlmClient?.getStatus(),
+      queuedDocuments: this.llmQueue.length,
+      workerRunning: this.llmWorkerRunning,
+      precomputeRunning: this.precomputeRunning,
+    };
+  }
+
   async get(candidate) {
     const plan = await this.governmentPlanService.get(candidate);
     if (!plan) return null;
-    if (this.memory.has(plan.sha256)) return this.memory.get(plan.sha256);
+    if (this.memory.has(plan.sha256)) {
+      const remembered = this.memory.get(plan.sha256);
+      this.queueLocalAnalysis(candidate, plan.sha256, remembered);
+      return remembered;
+    }
     if (this.pending.has(plan.sha256)) return this.pending.get(plan.sha256);
 
     const pending = (async () => {
-      const cached = await this.readCache(plan.sha256);
-      if (cached?.version === SUMMARY_VERSION) return cached;
+      const cached = await this.readReadyAnalysis(plan.sha256);
+      if (cached?.version === SUMMARY_VERSION) {
+        this.queueLocalAnalysis(candidate, plan.sha256, cached);
+        return cached;
+      }
       const extracted = await extractPdfPages(plan.buffer);
       const summary = {
         ...summarizeExtractedPages(extracted.pages, { pages: extracted.totalPages }),
         documentSha256: plan.sha256,
         generatedAt: new Date().toISOString(),
         source: plan.source,
+        aiAnalysis: this.localLlmClient?.isEnabled() ? {
+          status: 'QUEUED',
+          local: true,
+          model: this.config.localLlmModel,
+          analysisVersion: null,
+          promptVersion: LOCAL_LLM_PROMPT_VERSION,
+        } : {
+          status: 'DISABLED',
+          local: true,
+        },
       };
       await this.saveCache(plan.sha256, summary).catch(() => {});
+      this.queueLocalAnalysis(candidate, plan.sha256, summary);
       return summary;
     })();
     this.pending.set(plan.sha256, pending);

@@ -140,6 +140,7 @@ function bindEvents() {
   elements.candidateGrid.addEventListener('click', handleCandidateAction);
   elements.popularGrid.addEventListener('click', handleCandidateAction);
   elements.candidateDetail.addEventListener('click', handleCandidateAction);
+  elements.comparisonContent.addEventListener('click', handleCandidateAction);
   elements.colinhaSlots.addEventListener('click', (event) => {
     const remove = event.target.closest('[data-remove-slot]');
     if (remove) removeColinhaSlot(remove.dataset.removeSlot);
@@ -486,6 +487,8 @@ function showNotice(message) {
 function hideNotice() { elements.globalNotice.hidden = true; }
 
 function handleCandidateAction(event) {
+  const showMoreProposals = event.target.closest('[data-show-more-proposals]');
+  if (showMoreProposals) return showNextPlanProposals(showMoreProposals);
   const open = event.target.closest('[data-open-candidate]');
   if (open) return openCandidate(open.dataset.openCandidate);
   const compare = event.target.closest('[data-compare-candidate]');
@@ -758,7 +761,7 @@ async function loadGovernmentPlanSummary(id, container) {
   const host = container.querySelector('[data-plan-summary-host]');
   if (!host) return;
   try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=thematic-v8`);
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v1`);
     host.innerHTML = renderPlanSummary(payload.data);
   } catch {
     host.innerHTML = '<div class="not-published">O PDF oficial está disponível, mas o resumo automático não pôde ser produzido agora.</div>';
@@ -778,7 +781,15 @@ function renderPlanSummary(summary) {
   }).join('');
   const foundCount = summary.themeSummaries.filter((theme) => theme.status === 'FOUND').length;
   const totalThemes = summary.themeSummaries.length;
-  return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">LEITURA POR ${totalThemes} TEMAS</span><h4>Propostas organizadas para comparação</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com trechos</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p><div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas · gerado em ${formatDate(summary.generatedAt)}</span></div></section>`;
+  const localAiReady = summary.summaryType === 'AUTOMATIC_THEMATIC_LOCAL_LLM' && summary.aiAnalysis?.status === 'READY';
+  const analysisBadge = localAiReady ? 'IA LOCAL · PDF PROCESSADO' : `LEITURA POR ${totalThemes} TEMAS`;
+  const pending = summary.aiAnalysis?.status === 'QUEUED'
+    ? '<div class="analysis-progress"><strong>Análise aprofundada em processamento</strong><span>Os trechos oficiais já estão disponíveis. A consolidação pela IA local será salva e aparecerá automaticamente em uma próxima consulta.</span></div>'
+    : '';
+  const modelNote = localAiReady
+    ? ` · IA local ${escapeHtml(summary.aiAnalysis.model || '')} · ${Number(summary.aiAnalysis.chunksProcessed || 0)} blocos processados`
+    : '';
+  return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">${analysisBadge}</span><h4>Propostas organizadas para comparação</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com propostas</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p>${pending}<div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas${modelNote} · gerado em ${formatDate(summary.generatedAt)}</span></div></section>`;
 }
 
 function renderPlanTheme(theme, pdfUrl, open = false) {
@@ -788,9 +799,38 @@ function renderPlanTheme(theme, pdfUrl, open = false) {
     ? `páginas ${theme.pages.map((page) => Number(page) || 1).join(', ')}`
     : 'nenhuma página classificada';
   const content = found
-    ? proposals.map((proposal) => `<article class="theme-proposal"><p>${escapeHtml(proposal.text)}</p><div class="theme-location"><span><strong>Seção:</strong> ${escapeHtml(proposal.section || 'não identificada no texto extraído')}</span><a href="${escapeHtml(pdfUrl)}#page=${Number(proposal.page) || 1}" target="_blank" rel="noopener noreferrer">Conferir na página ${Number(proposal.page) || 1} ↗</a></div></article>`).join('')
+    ? `${proposals.map((proposal, index) => renderPlanProposal(proposal, pdfUrl, index)).join('')}${proposals.length > 3 ? `<button class="secondary-button proposal-more-button" type="button" data-show-more-proposals>Ver mais 3 propostas</button>` : ''}`
     : '<div class="theme-not-found">Nenhum trecho com linguagem de proposta foi identificado automaticamente neste tema. Isso não comprova que o assunto esteja ausente do documento.</div>';
-  return `<details class="plan-theme ${found ? 'is-found' : 'is-missing'}" ${open ? 'open' : ''}><summary><span class="theme-status" aria-hidden="true">${found ? 'Encontrado' : 'Não identificado'}</span><span class="theme-title"><strong>${escapeHtml(theme.label)}</strong><small>${found ? `${proposals.length} ${proposals.length === 1 ? 'trecho' : 'trechos'} · ${escapeHtml(pageLabel)}` : 'sem trecho classificado'}</small></span><span class="theme-expand" aria-hidden="true">+</span></summary><div class="theme-content">${content}</div></details>`;
+  return `<details class="plan-theme ${found ? 'is-found' : 'is-missing'}" ${open ? 'open' : ''}><summary><span class="theme-status" aria-hidden="true">${found ? 'Encontrado' : 'Não identificado'}</span><span class="theme-title"><strong>${escapeHtml(theme.label)}</strong><small>${found ? `${proposals.length} ${proposals.length === 1 ? 'proposta' : 'propostas'} · ${escapeHtml(pageLabel)}` : 'sem proposta classificada'}</small></span><span class="theme-expand" aria-hidden="true">+</span></summary><div class="theme-content">${content}</div></details>`;
+}
+
+function renderListBlock(label, values, className = '') {
+  const items = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (!items.length) return '';
+  return `<div class="proposal-context ${className}"><strong>${escapeHtml(label)}</strong><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>`;
+}
+
+function renderPlanProposal(proposal, pdfUrl, index) {
+  const localAi = proposal.extraction === 'LOCAL_LLM_GROUNDED';
+  const hidden = index >= 3 ? ' hidden data-collapsed-proposal' : '';
+  if (!localAi) {
+    return `<article class="theme-proposal"${hidden}><p>${escapeHtml(proposal.text)}</p><div class="theme-location"><span><strong>Seção:</strong> ${escapeHtml(proposal.section || 'não identificada no texto extraído')}</span><a href="${escapeHtml(pdfUrl)}#page=${Number(proposal.page) || 1}" target="_blank" rel="noopener noreferrer">Conferir na página ${Number(proposal.page) || 1} ↗</a></div></article>`;
+  }
+  const evidences = Array.isArray(proposal.evidences) ? proposal.evidences : [];
+  const scenario = proposal.fourYearScenario || {};
+  const pages = [...new Set(evidences.map((evidence) => Number(evidence.page) || 1))];
+  const evidenceContent = evidences.map((evidence) => `<blockquote><p>${escapeHtml(evidence.quote)}</p><a href="${escapeHtml(pdfUrl)}#page=${Number(evidence.page) || 1}" target="_blank" rel="noopener noreferrer">Conferir página ${Number(evidence.page) || 1} ↗</a></blockquote>`).join('');
+  return `<article class="theme-proposal is-ai-consolidated"${hidden}><div class="proposal-title-row"><span>${index + 1}</span><div><small>PROPOSTA CONSOLIDADA</small><h5>${escapeHtml(proposal.title || 'Proposta identificada')}</h5></div></div><p class="proposal-summary-text">${escapeHtml(proposal.summary || proposal.text)}</p><section class="four-year-impact"><span>POSSÍVEL IMPACTO EM 4 ANOS · CENÁRIO CONDICIONAL</span><p>${escapeHtml(scenario.potentialImpact || 'O resultado dependerá da execução e dos recursos disponíveis.')}</p><ol><li><strong>Primeiro ano</strong><p>${escapeHtml(scenario.firstYear || 'Etapa não detalhada no plano.')}</p></li><li><strong>Anos 2 e 3</strong><p>${escapeHtml(scenario.yearsTwoAndThree || 'Etapa não detalhada no plano.')}</p></li><li><strong>Quarto ano</strong><p>${escapeHtml(scenario.fourthYear || 'Resultado não quantificado no plano.')}</p></li></ol></section><div class="proposal-context-grid">${renderListBlock('Quem pode ser afetado', proposal.audience)}${renderListBlock('Dependências', proposal.requirements)}${renderListBlock('Riscos de execução', proposal.risks, 'is-risk')}${renderListBlock('Como acompanhar', proposal.indicators)}${renderListBlock('Não identificado nos trechos', proposal.missingInformation, 'is-missing')}</div><details class="proposal-evidence"><summary>Ver ${evidences.length} ${evidences.length === 1 ? 'evidência' : 'evidências'} no PDF · ${escapeHtml(pages.map((page) => `p. ${page}`).join(', '))}</summary>${evidenceContent}</details>${proposal.section ? `<div class="theme-location"><span><strong>Seção associada:</strong> ${escapeHtml(proposal.section)}</span></div>` : ''}</article>`;
+}
+
+function showNextPlanProposals(button) {
+  const host = button.closest('.theme-content');
+  if (!host) return;
+  const hidden = [...host.querySelectorAll('[data-collapsed-proposal][hidden]')];
+  hidden.slice(0, 3).forEach((proposal) => { proposal.hidden = false; });
+  const remaining = host.querySelectorAll('[data-collapsed-proposal][hidden]').length;
+  if (!remaining) button.remove();
+  else button.textContent = `Ver mais ${Math.min(3, remaining)} propostas`;
 }
 
 function renderGovernmentPlan(plan, candidateId, summary = null) {
@@ -872,7 +912,7 @@ async function candidateEvidence(candidate) {
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/status`)
       : Promise.resolve(null),
     planEligible
-      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=thematic-v8`)
+      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v1`)
       : Promise.resolve(null),
     candidate.legislative
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative`)

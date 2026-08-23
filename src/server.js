@@ -1,8 +1,24 @@
 const app = require('./app');
-const { config, store, synchronizer, initializeRuntime } = require('./runtime');
+const {
+  config,
+  store,
+  synchronizer,
+  governmentPlanSummaryService,
+  initializeRuntime,
+} = require('./runtime');
 
 let server;
 let timer;
+
+function precomputeLatestGovernmentPlans() {
+  const snapshot = store.getSnapshot();
+  if (!snapshot?.candidates?.length) return;
+  setImmediate(() => {
+    governmentPlanSummaryService.precomputeCandidates(snapshot.candidates).catch((error) => {
+      console.error('Falha na preparação local dos planos de governo:', error.message);
+    });
+  });
+}
 
 async function start() {
   await initializeRuntime();
@@ -15,17 +31,21 @@ async function start() {
   if (config.syncOnStart && !hasPersistedSnapshot) {
     synchronizer.synchronize('startup').then((meta) => {
       console.log(`Sincronização concluída: ${meta.candidateCount} candidaturas oficiais.`);
+      precomputeLatestGovernmentPlans();
     }).catch((error) => {
       console.error('Falha na sincronização inicial:', error.message);
     });
   } else if (hasPersistedSnapshot) {
     console.log('Base persistida carregada; nenhuma sincronização de inicialização foi necessária.');
+    precomputeLatestGovernmentPlans();
   }
 
   timer = setInterval(() => {
-    synchronizer.synchronize('scheduled').catch((error) => {
-      console.error('Falha na sincronização agendada:', error.message);
-    });
+    synchronizer.synchronize('scheduled')
+      .then(() => precomputeLatestGovernmentPlans())
+      .catch((error) => {
+        console.error('Falha na sincronização agendada:', error.message);
+      });
   }, config.syncIntervalMinutes * 60 * 1000);
   timer.unref();
 }

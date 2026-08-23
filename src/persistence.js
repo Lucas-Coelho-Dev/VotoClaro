@@ -123,6 +123,22 @@ class SnapshotStore {
       );
       CREATE INDEX IF NOT EXISTS candidate_view_counts_ranking_idx
         ON candidate_view_counts (view_count DESC, last_viewed_at DESC);
+
+      CREATE TABLE IF NOT EXISTS government_plan_analyses (
+        document_sha256 TEXT NOT NULL,
+        analysis_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('PENDING', 'PROCESSING', 'READY', 'FAILED')),
+        model TEXT,
+        prompt_version TEXT,
+        payload JSONB,
+        error_message TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (document_sha256, analysis_version)
+      );
+      CREATE INDEX IF NOT EXISTS government_plan_analyses_status_idx
+        ON government_plan_analyses (status, updated_at);
     `);
   }
 
@@ -337,6 +353,48 @@ class SnapshotStore {
         || left.candidateId.localeCompare(right.candidateId)
       ))
       .slice(0, safeLimit);
+  }
+
+  async getGovernmentPlanAnalysis(documentSha256, analysisVersion) {
+    if (!this.pool) return null;
+    const result = await this.pool.query(
+      `SELECT document_sha256 AS "documentSha256", analysis_version AS "analysisVersion",
+              status, model, prompt_version AS "promptVersion", payload,
+              error_message AS "error", attempts, created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM government_plan_analyses
+       WHERE document_sha256 = $1 AND analysis_version = $2`,
+      [documentSha256, analysisVersion],
+    );
+    return result.rows[0] || null;
+  }
+
+  async saveGovernmentPlanAnalysis(record) {
+    if (!this.pool) return;
+    await this.pool.query(
+      `INSERT INTO government_plan_analyses (
+         document_sha256, analysis_version, status, model, prompt_version,
+         payload, error_message, attempts, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()), NOW())
+       ON CONFLICT (document_sha256, analysis_version) DO UPDATE SET
+         status = EXCLUDED.status,
+         model = EXCLUDED.model,
+         prompt_version = EXCLUDED.prompt_version,
+         payload = EXCLUDED.payload,
+         error_message = EXCLUDED.error_message,
+         attempts = EXCLUDED.attempts,
+         updated_at = NOW()`,
+      [
+        record.documentSha256,
+        record.analysisVersion,
+        record.status,
+        record.model || null,
+        record.promptVersion || null,
+        record.payload || null,
+        record.error || null,
+        Number(record.attempts) || 0,
+        record.createdAt || null,
+      ],
+    );
   }
 
   async queuedJsonWrite(target, value) {

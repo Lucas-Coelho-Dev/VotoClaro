@@ -5,7 +5,8 @@ const { LegislativeService } = require('./legislative');
 const { CandidatePhotoSync } = require('./photo-sync');
 const { GeographyService } = require('./geography');
 const { GovernmentPlanService } = require('./government-plans');
-const { GovernmentPlanSummaryService } = require('./plan-summary');
+const { GovernmentPlanSummaryService, THEMES } = require('./plan-summary');
+const { LocalLlmClient } = require('./local-llm');
 const { CandidateIdentityVault, IntegrityService } = require('./integrity');
 
 const store = new SnapshotStore(config);
@@ -15,7 +16,13 @@ const identityVault = new CandidateIdentityVault();
 const synchronizer = new OfficialDataSync(config, store, photoSynchronizer, identityVault);
 const geographyService = new GeographyService(config);
 const governmentPlanService = new GovernmentPlanService(config);
-const governmentPlanSummaryService = new GovernmentPlanSummaryService(config, governmentPlanService);
+const localLlmClient = new LocalLlmClient(config, THEMES);
+const governmentPlanSummaryService = new GovernmentPlanSummaryService(
+  config,
+  governmentPlanService,
+  store,
+  localLlmClient,
+);
 const integrityService = new IntegrityService(config, identityVault);
 let initialization = null;
 
@@ -38,6 +45,7 @@ module.exports = {
   geographyService,
   governmentPlanService,
   governmentPlanSummaryService,
+  localLlmClient,
   identityVault,
   integrityService,
   initializeRuntime,

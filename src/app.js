@@ -158,6 +158,7 @@ app.get('/api/v1/health', (request, response) => {
   const importedAt = snapshot?.meta?.importedAt || null;
   const ageHours = importedAt ? (Date.now() - new Date(importedAt).getTime()) / 3_600_000 : null;
   const stale = ageHours === null || ageHours > 36;
+  const planAnalysisStatus = governmentPlanSummaryService.getStatus();
   response.status(snapshot && !stale ? 200 : 503).json({
     status: !snapshot ? 'INITIALIZING' : stale ? 'STALE' : 'OK',
     dataReady: Boolean(snapshot),
@@ -171,6 +172,16 @@ app.get('/api/v1/health', (request, response) => {
     ageHours: ageHours === null ? null : Number(ageHours.toFixed(2)),
     checksum: snapshot?.meta?.checksum || null,
     integrity: integrityService.getStatus(),
+    localPlanAnalysis: {
+      enabled: Boolean(planAnalysisStatus.enabled),
+      mode: planAnalysisStatus.mode,
+      model: planAnalysisStatus.model,
+      queuedDocuments: planAnalysisStatus.queuedDocuments,
+      workerRunning: planAnalysisStatus.workerRunning,
+      precomputeRunning: planAnalysisStatus.precomputeRunning,
+      lastSuccessAt: planAnalysisStatus.lastSuccessAt,
+      lastErrorAt: planAnalysisStatus.lastErrorAt,
+    },
   });
 });
 
@@ -392,7 +403,13 @@ app.get('/api/v1/candidates/:id/government-plan/summary', async (request, respon
         message: 'Não há documento oficial para resumir nesta candidatura.',
       });
     }
-    response.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    const localAnalysisReady = summary.aiAnalysis?.status === 'READY';
+    response.setHeader(
+      'Cache-Control',
+      localAnalysisReady
+        ? 'public, max-age=86400, stale-while-revalidate=604800'
+        : 'no-store',
+    );
     return response.json({
       data: {
         ...summary,
