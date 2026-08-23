@@ -7,6 +7,11 @@ const { THEMES } = require('../src/plan-summary');
 test('consulta somente o servidor local e exige resposta estruturada', async (context) => {
   let received;
   const server = http.createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/health') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
     let body = '';
     request.setEncoding('utf8');
     request.on('data', (chunk) => { body += chunk; });
@@ -48,9 +53,11 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
     localLlmBaseUrl: `http://127.0.0.1:${address.port}/v1`,
     localLlmModel: 'qwen3-4b-local',
     localLlmTimeoutMs: 5000,
+    localLlmStartupWaitMs: 5000,
     localLlmMaxOutputTokens: 800,
     localLlmTemperature: 0.1,
   }, THEMES);
+  await client.waitUntilReady();
   const result = await client.analyzeChunk({
     text: '<<<PÁGINA 3>>>\nVamos ampliar o ensino em tempo integral para estudantes da rede pública.',
     pages: [3],
@@ -63,6 +70,7 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
   assert.equal(received.reasoning_effort, 'none');
   assert.equal(received.seed, 2026);
   assert.match(received.messages[0].content, /não avalie o candidato/i);
+  assert.equal(client.getStatus().serverReadyAt !== null, true);
   assert.equal(client.getStatus().lastSuccessAt !== null, true);
 });
 

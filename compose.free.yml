@@ -72,7 +72,7 @@ services:
       db:
         condition: service_healthy
       llm:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>{if(![200,503].includes(r.status))process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s

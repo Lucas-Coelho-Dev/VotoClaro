@@ -54,6 +54,7 @@ module.exports = Object.freeze({
   localLlmBaseUrl: process.env.LOCAL_LLM_BASE_URL || 'http://llm:8080/v1',
   localLlmModel: process.env.LOCAL_LLM_MODEL || 'qwen3-4b-local',
   localLlmTimeoutMs: integerFromEnv('LOCAL_LLM_TIMEOUT_MS', 10 * 60 * 1000, 5000),
+  localLlmStartupWaitMs: integerFromEnv('LOCAL_LLM_STARTUP_WAIT_MS', 30 * 60 * 1000, 30_000),
   localLlmChunkCharacters: integerFromEnv('LOCAL_LLM_CHUNK_CHARACTERS', 9000, 2000),
   localLlmMaxOutputTokens: integerFromEnv('LOCAL_LLM_MAX_OUTPUT_TOKENS', 1400, 256),
   localLlmTemperature: numberFromEnv('LOCAL_LLM_TEMPERATURE', 0.1, 0, 0.4),

@@ -63,7 +63,7 @@ docker compose --env-file .env.free -f compose.free.yml up -d --build
 docker compose --env-file .env.free -f compose.free.yml logs -f app
 ```
 
-Na primeira inicialização, o serviço `llm` também baixa aproximadamente 2,5 GB do modelo Qwen3 4B para o volume persistente `llm_models`. Esse download não se repete em reinicializações normais. O aplicativo espera o teste de saúde do modelo ficar pronto antes de iniciar a fila de análises. Para acompanhar:
+Na primeira inicialização, o serviço `llm` também baixa aproximadamente 2,5 GB do modelo Qwen3 4B para o volume persistente `llm_models`. Esse download não se repete em reinicializações normais. O portal e o resumo extrativo abrem enquanto a fila aguarda o teste de saúde do modelo ficar pronto em segundo plano. Para acompanhar:
 
 ```bash
 docker compose --env-file .env.free -f compose.free.yml logs -f llm
@@ -75,7 +75,7 @@ Somente a primeira inicialização de um banco vazio faz a importação nacional
 https://SEU_SITE/api/v1/health
 ```
 
-O campo `status` deve chegar a `OK`, e `candidateCount` e `photoCount` devem ser maiores que zero. Em `localPlanAnalysis`, confirme `enabled: true`; `lastSuccessAt` será preenchido depois da primeira análise concluída. Depois que os serviços estiverem prontos, o portal abre normalmente enquanto a fila trabalha.
+O campo `status` deve chegar a `OK`, e `candidateCount` e `photoCount` devem ser maiores que zero. Em `localPlanAnalysis`, confirme `enabled: true`; o modo pode aparecer como `WAITING_FOR_SERVER` no primeiro download e `lastSuccessAt` será preenchido depois da primeira análise concluída. O portal abre normalmente enquanto a fila trabalha.
 
 ## 5. Atualizar e fazer backup
 

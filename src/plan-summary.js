@@ -580,6 +580,11 @@ class GovernmentPlanSummaryService {
           await this.processLocalAnalysis(job);
         } catch (error) {
           console.error(`Falha na análise local do plano ${job.sha256.slice(0, 12)}:`, error.message);
+          if (error.code === 'LOCAL_LLM_NOT_READY') {
+            this.llmQueue.length = 0;
+            this.queuedLlmDocuments.clear();
+            break;
+          }
         } finally {
           this.queuedLlmDocuments.delete(job.sha256);
         }
@@ -590,6 +595,7 @@ class GovernmentPlanSummaryService {
   }
 
   async processLocalAnalysis(job) {
+    await this.localLlmClient.waitUntilReady();
     const attempts = await this.analysisAttempts(job.sha256);
     if (attempts >= 3) return;
     await this.store?.saveGovernmentPlanAnalysis?.({

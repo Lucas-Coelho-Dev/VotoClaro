@@ -126,6 +126,10 @@ function localEndpoint(baseUrl) {
   return endpoint;
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 class LocalLlmClient {
   constructor(config, themes) {
     this.config = config;
@@ -134,6 +138,8 @@ class LocalLlmClient {
     this.lastErrorAt = null;
     this.lastError = null;
     this.activeRequests = 0;
+    this.waitingForServer = false;
+    this.serverReadyAt = null;
   }
 
   isEnabled() {
@@ -143,14 +149,53 @@ class LocalLlmClient {
   getStatus() {
     return {
       enabled: this.isEnabled(),
-      mode: this.isEnabled() ? 'LOCAL_SERVER' : 'DISABLED',
+      mode: !this.isEnabled() ? 'DISABLED' : this.waitingForServer ? 'WAITING_FOR_SERVER' : 'LOCAL_SERVER',
       model: this.config.localLlmModel,
       promptVersion: LOCAL_LLM_PROMPT_VERSION,
       activeRequests: this.activeRequests,
+      waitingForServer: this.waitingForServer,
+      serverReadyAt: this.serverReadyAt,
       lastSuccessAt: this.lastSuccessAt,
       lastErrorAt: this.lastErrorAt,
       lastError: this.lastError,
     };
+  }
+
+  async checkHealth() {
+    if (!this.isEnabled()) return false;
+    const completionEndpoint = localEndpoint(this.config.localLlmBaseUrl);
+    const endpoint = new URL('/health', completionEndpoint.origin);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(endpoint, { signal: controller.signal, headers: { Accept: 'application/json' } });
+      if (!response.ok) return false;
+      this.serverReadyAt = new Date().toISOString();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async waitUntilReady() {
+    const maximumWait = Number(this.config.localLlmStartupWaitMs) || 30 * 60 * 1000;
+    const deadline = Date.now() + maximumWait;
+    this.waitingForServer = true;
+    try {
+      while (Date.now() < deadline) {
+        if (await this.checkHealth()) return;
+        await delay(Math.min(10_000, Math.max(250, deadline - Date.now())));
+      }
+      const error = new Error('O servidor da IA local não ficou pronto dentro do tempo configurado.');
+      error.code = 'LOCAL_LLM_NOT_READY';
+      this.lastErrorAt = new Date().toISOString();
+      this.lastError = error.message;
+      throw error;
+    } finally {
+      this.waitingForServer = false;
+    }
   }
 
   async analyzeChunk(chunk) {
