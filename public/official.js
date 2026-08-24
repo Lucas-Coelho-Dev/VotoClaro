@@ -781,7 +781,7 @@ async function loadGovernmentPlanSummary(id, container) {
   const host = container.querySelector('[data-plan-summary-host]');
   if (!host) return;
   try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v7`);
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v14`);
     host.innerHTML = renderPlanSummary(payload.data);
     clearTimeout(container.planSummaryPollTimer);
     const retrying = payload.data?.aiAnalysis?.status === 'FAILED'
@@ -853,10 +853,18 @@ function renderPlanTheme(theme, pdfUrl, open = false) {
   const pageLabel = theme.pages?.length
     ? `páginas ${theme.pages.map((page) => Number(page) || 1).join(', ')}`
     : 'nenhuma página classificada';
+  const digest = theme.digest ? renderThemeDigest(theme.digest, pdfUrl) : '';
   const content = found
-    ? `${proposals.map((proposal, index) => renderPlanProposal(proposal, pdfUrl, index)).join('')}${proposals.length > 3 ? `<button class="secondary-button proposal-more-button" type="button" data-show-more-proposals>Ver mais 3 propostas</button>` : ''}`
+    ? `${digest}${digest ? '<div class="official-excerpts-label">3 trechos oficiais usados no resumo</div>' : ''}${proposals.map((proposal, index) => renderPlanProposal(proposal, pdfUrl, index)).join('')}${proposals.length > 3 ? `<button class="secondary-button proposal-more-button" type="button" data-show-more-proposals>Ver mais 3 propostas</button>` : ''}`
     : '<div class="theme-not-found">Nenhum trecho com linguagem de proposta foi identificado automaticamente neste tema. Isso não comprova que o assunto esteja ausente do documento.</div>';
   return `<details class="plan-theme ${found ? 'is-found' : 'is-missing'}" ${open ? 'open' : ''}><summary><span class="theme-status" aria-hidden="true">${found ? 'Encontrado' : 'Não identificado'}</span><span class="theme-title"><strong>${escapeHtml(theme.label)}</strong><small>${found ? `${proposals.length} ${proposals.length === 1 ? 'proposta' : 'propostas'} · ${escapeHtml(pageLabel)}` : 'sem proposta classificada'}</small></span><span class="theme-expand" aria-hidden="true">+</span></summary><div class="theme-content">${content}</div></details>`;
+}
+
+function renderThemeDigest(digest, pdfUrl) {
+  const evidences = Array.isArray(digest.evidences) ? digest.evidences : [];
+  const pages = [...new Set(evidences.map((evidence) => Number(evidence.page) || 1))];
+  const pageLinks = pages.map((page) => `<a href="${escapeHtml(pdfUrl)}#page=${page}" target="_blank" rel="noopener noreferrer">p. ${page} ↗</a>`).join(' · ');
+  return `<article class="theme-digest"><div class="theme-digest-heading"><span>RESUMO DA IA · BASEADO NOS TRECHOS DESTE TEMA</span>${pageLinks ? `<small>${pageLinks}</small>` : ''}</div><p>${escapeHtml(digest.summary)}</p><section class="four-year-impact"><span>POSSÍVEL IMPACTO EM 4 ANOS · CENÁRIO CONDICIONAL</span><p>${escapeHtml(digest.potentialImpact || 'O resultado dependerá da execução e dos recursos disponíveis.')}</p></section></article>`;
 }
 
 function renderListBlock(label, values, className = '') {
@@ -978,7 +986,7 @@ async function candidateEvidence(candidate) {
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/status`)
       : Promise.resolve(null),
     planEligible
-      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v7`)
+      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v14`)
       : Promise.resolve(null),
     candidate.legislative
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative`)

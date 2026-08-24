@@ -24,18 +24,12 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
             content: JSON.stringify({
               objective: {
                 summary: 'O plano busca ampliar serviços públicos de educação com foco no atendimento da rede.',
-                evidences: [{ page: 3, quote: 'Vamos ampliar o ensino em tempo integral para estudantes da rede pública.' }],
+                evidenceThemes: ['educacao'],
               },
-              proposals: [{
-                theme: 'educacao',
-                title: 'Ensino em tempo integral',
-                summary: 'Ampliação do ensino em tempo integral conforme o documento oficial.',
-                evidences: [{ page: 3, quote: 'Vamos ampliar o ensino em tempo integral para estudantes da rede pública.' }],
-                audience: ['estudantes'],
-                requirements: ['infraestrutura'],
-                missingInformation: ['custo'],
-                potentialImpact: 'Possível ampliação do atendimento ao longo do mandato.',
-              }],
+              themeDigests: { educacao: {
+                summary: 'Segundo o plano de governo, o candidato propõe ampliar o ensino em tempo integral na rede pública.',
+                potentialImpact: 'A medida pode ampliar o atendimento, se houver execução e recursos disponíveis.',
+              } },
             }),
           },
         }],
@@ -48,7 +42,7 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
   const client = new LocalLlmClient({
     localLlmEnabled: true,
     localLlmBaseUrl: `http://127.0.0.1:${address.port}/v1`,
-    localLlmModel: 'qwen3-4b-local',
+    localLlmModel: 'qwen3-1.7b-local',
     localLlmTimeoutMs: 5000,
     localLlmStartupWaitMs: 5000,
     localLlmMaxOutputTokens: 800,
@@ -59,17 +53,17 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
     text: '<<<PÁGINA 3>>>\nVamos ampliar o ensino em tempo integral para estudantes da rede pública.',
     pages: [3],
   });
-  assert.equal(result.proposals.length, 1);
+  assert.equal(result.themeDigests.length, 1);
   assert.match(result.objective.summary, /ampliar serviços públicos/i);
-  assert.equal(result.proposals[0].theme, 'educacao');
-  assert.equal(received.model, 'qwen3-4b-local');
+  assert.equal(result.themeDigests[0].theme, 'educacao');
+  assert.equal(received.model, 'qwen3-1.7b-local');
   assert.equal(received.response_format.type, 'json_schema');
   assert.equal(
-    received.response_format.json_schema.schema.properties.proposals.items.required.includes('potentialImpact'),
+    received.response_format.json_schema.schema.properties.themeDigests.properties.educacao.required.includes('potentialImpact'),
     true,
   );
   assert.equal(
-    received.response_format.json_schema.schema.properties.proposals.items.required.includes('fourYearScenario'),
+    received.response_format.json_schema.schema.properties.themeDigests.properties.educacao.required.includes('fourYearScenario'),
     false,
   );
   assert.equal(received.chat_template_kwargs.enable_thinking, false);
@@ -93,9 +87,12 @@ test('mantém respostas longas vivas por transmissão contínua', async (context
       const content = JSON.stringify({
         objective: {
           summary: 'O plano busca ampliar a educação pública com atendimento mais próximo da população.',
-          evidences: [{ page: 5, quote: 'O programa pretende ampliar escolas e fortalecer a educação pública.' }],
+          evidenceThemes: ['educacao'],
         },
-        proposals: [],
+        themeDigests: { educacao: {
+          summary: 'Segundo o plano de governo, o candidato propõe ampliar escolas e fortalecer a educação pública.',
+          potentialImpact: 'A medida pode aproximar o atendimento da população, se for implementada.',
+        } },
       });
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       for (const part of [content.slice(0, 37), content.slice(37)]) {
@@ -110,7 +107,7 @@ test('mantém respostas longas vivas por transmissão contínua', async (context
   const client = new LocalLlmClient({
     localLlmEnabled: true,
     localLlmBaseUrl: `http://127.0.0.1:${address.port}/v1`,
-    localLlmModel: 'qwen3-4b-local',
+    localLlmModel: 'qwen3-1.7b-local',
     localLlmTimeoutMs: 5000,
     localLlmStartupWaitMs: 5000,
     localLlmMaxOutputTokens: 800,
@@ -120,7 +117,7 @@ test('mantém respostas longas vivas por transmissão contínua', async (context
     text: '<<<PÁGINA 5>>>\nO programa pretende ampliar escolas e fortalecer a educação pública.',
     pages: [5],
   });
-  assert.equal(result.proposals.length, 0);
+  assert.equal(result.themeDigests.length, 1);
   assert.match(result.objective.summary, /educação pública/i);
 });
 

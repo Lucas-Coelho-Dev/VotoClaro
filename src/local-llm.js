@@ -1,96 +1,56 @@
 const { z } = require('zod');
 
-const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v7';
-const LOCAL_LLM_PROMPT_VERSION = 'government-plan-evidence-explainer-v7';
-
-const evidenceSchema = z.object({
-  page: z.coerce.number().int().min(1).max(10000),
-  quote: z.string().trim().min(20).max(420),
-});
+const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v14';
+const LOCAL_LLM_PROMPT_VERSION = 'government-plan-theme-digest-v14';
 
 const objectiveSchema = z.object({
-  summary: z.string().trim().min(30).max(360),
-  evidences: z.array(evidenceSchema).min(1).max(2),
+  summary: z.string().trim().min(30).max(180),
+  evidenceThemes: z.array(z.string().trim().min(1).max(80)).min(1).max(2),
 });
 
-const proposalSchema = z.object({
-  theme: z.string().trim().min(1).max(80),
-  title: z.string().trim().min(4).max(100),
-  summary: z.string().trim().min(20).max(320),
-  evidences: z.array(evidenceSchema).min(1).max(1),
-  audience: z.array(z.string().trim().min(2).max(100)).max(2).default([]),
-  requirements: z.array(z.string().trim().min(2).max(140)).max(2).default([]),
-  missingInformation: z.array(z.string().trim().min(2).max(120)).max(2).default([]),
-  potentialImpact: z.string().trim().max(280).default(''),
+const themeDigestSchema = z.object({
+  summary: z.string().trim().min(30).max(140),
+  potentialImpact: z.string().trim().min(15).max(80),
 });
 
 const llmResponseSchema = z.object({
   objective: objectiveSchema,
-  proposals: z.array(proposalSchema).max(3).default([]),
+  themeDigests: z.record(z.string(), themeDigestSchema),
 });
 
 function responseJsonSchema(themeIds) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['objective', 'proposals'],
+    required: ['objective', 'themeDigests'],
     properties: {
       objective: {
         type: 'object',
         additionalProperties: false,
-        required: ['summary', 'evidences'],
+        required: ['summary', 'evidenceThemes'],
         properties: {
-          summary: { type: 'string', minLength: 30, maxLength: 360 },
-          evidences: {
+          summary: { type: 'string', minLength: 30, maxLength: 180 },
+          evidenceThemes: {
             type: 'array',
             minItems: 1,
             maxItems: 2,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['page', 'quote'],
-              properties: {
-                page: { type: 'integer', minimum: 1, maximum: 10000 },
-                quote: { type: 'string', minLength: 20, maxLength: 420 },
-              },
-            },
+            items: { type: 'string', enum: themeIds },
           },
         },
       },
-      proposals: {
-        type: 'array',
-        maxItems: 3,
-        items: {
+      themeDigests: {
+        type: 'object',
+        additionalProperties: false,
+        required: themeIds,
+        properties: Object.fromEntries(themeIds.map((themeId) => [themeId, {
           type: 'object',
           additionalProperties: false,
-          required: [
-            'theme', 'title', 'summary', 'evidences', 'audience', 'requirements',
-            'missingInformation', 'potentialImpact',
-          ],
+          required: ['summary', 'potentialImpact'],
           properties: {
-            theme: { type: 'string', enum: themeIds },
-            title: { type: 'string', minLength: 4, maxLength: 100 },
-            summary: { type: 'string', minLength: 20, maxLength: 320 },
-            evidences: {
-              type: 'array',
-              minItems: 1,
-              maxItems: 1,
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['page', 'quote'],
-                properties: {
-                  page: { type: 'integer', minimum: 1, maximum: 10000 },
-                  quote: { type: 'string', minLength: 20, maxLength: 420 },
-                },
-              },
-            },
-            audience: { type: 'array', maxItems: 2, items: { type: 'string', maxLength: 100 } },
-            requirements: { type: 'array', maxItems: 2, items: { type: 'string', maxLength: 140 } },
-            missingInformation: { type: 'array', maxItems: 2, items: { type: 'string', maxLength: 120 } },
-            potentialImpact: { type: 'string', maxLength: 280 },
+            summary: { type: 'string', minLength: 30, maxLength: 140 },
+            potentialImpact: { type: 'string', minLength: 15, maxLength: 80 },
           },
-        },
+        }])),
       },
     },
   };
@@ -233,28 +193,41 @@ class LocalLlmClient {
     }
   }
 
-  async analyzeChunk(chunk) {
+  async analyzeChunk(chunk, context = {}) {
     if (!this.isEnabled()) throw new Error('A LLM local está desabilitada.');
-    const themeList = this.themes.map((theme) => `${theme.id}: ${theme.label}`).join('\n');
+    const allowedThemeIds = Array.isArray(chunk.themeIds) && chunk.themeIds.length
+      ? chunk.themeIds
+      : this.themes.map((theme) => theme.id);
+    const themeList = this.themes
+      .filter((theme) => allowedThemeIds.includes(theme.id))
+      .map((theme) => `${theme.id}: ${theme.label}`)
+      .join('\n');
+    const candidateName = String(context.candidateName || 'o candidato')
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 100);
     const system = [
       '/no_think',
       'Você é um explicador neutro de planos de governo oficiais brasileiros.',
       'Use exclusivamente o texto fornecido. Não use conhecimento externo e não avalie o candidato.',
       'Não trate o candidato como eleito nem como governo em exercício; escreva sempre que o plano pretende ou propõe.',
-      'Explique primeiro o objetivo central que conecta as prioridades recorrentes do plano.',
-      'Depois selecione as três propostas mais representativas do plano, no máximo uma por tema, apenas quando houver compromisso, ação, programa ou meta.',
-      'Diagnósticos, críticas e intenções genéricas isoladas não são propostas.',
-      'Cada proposta precisa conter ao menos uma citação literal, com a página exatamente marcada no texto.',
-      'O objetivo central também precisa de citações literais que sustentem a síntese.',
+      'Explique primeiro o objetivo central que conecta as prioridades recorrentes dos trechos.',
+      'Depois produza exatamente uma síntese para cada TEMA SUGERIDO presente no texto.',
+      'Em themeDigests, preencha obrigatoriamente cada chave de tema fornecida; não use uma lista.',
+      'Em cada síntese, reúna as ações concretas dos até três trechos daquele mesmo tema; nunca misture temas.',
+      'No summary, não escreva o nome nem introduções; comece diretamente com um verbo no infinitivo que resuma as ações.',
+      'Não repita os trechos literalmente e não crie uma quarta proposta.',
       'Não invente números, custos, prazos, beneficiários ou resultados.',
-      'Escreva para uma pessoa comum: frases curtas, concretas e sem jargão.',
-      'O impacto em quatro anos é condicional: descreva um efeito possível, nunca uma garantia.',
-      'Quando o documento não informar custo, meta, prazo ou fonte de recursos, registre isso em missingInformation.',
-      'Não use algarismos no impacto condicional que não estejam nas evidências.',
-      'Seja conciso para cobrir mais temas com menos texto.',
+      'Escreva para uma pessoa comum: frases curtas, concretas, enriquecedoras e sem jargão.',
+      'Cada summary deve ter no máximo 110 caracteres e terminar com ponto final.',
+      'No potentialImpact, não repita a proposta nem o nome; comece com um verbo no infinitivo e descreva somente o efeito possível.',
+      'Cada potentialImpact deve ter no máximo 60 caracteres e terminar com ponto final.',
+      'Não use algarismos que não estejam nos trechos fornecidos.',
+      'Seja conciso para cobrir todos os temas com pouco texto.',
       'Responda apenas no JSON solicitado.',
     ].join(' ');
-    const user = `TEMAS PERMITIDOS:\n${themeList}\n\nEVIDÊNCIAS SELECIONADAS DO PDF OFICIAL, COM MARCADORES DE PÁGINA:\n${chunk.text}`;
+    const user = `NOME: ${candidateName}\n\nTEMAS DESTE BLOCO:\n${themeList}\n\nATÉ TRÊS TRECHOS POR TEMA, EXTRAÍDOS DO PDF OFICIAL E MARCADOS COM A PÁGINA:\n${chunk.text}`;
     const endpoint = localEndpoint(this.config.localLlmBaseUrl);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.localLlmTimeoutMs);
@@ -285,7 +258,7 @@ class LocalLlmClient {
             json_schema: {
               name: 'government_plan_explanation',
               strict: true,
-              schema: responseJsonSchema(this.themes.map((theme) => theme.id)),
+              schema: responseJsonSchema(allowedThemeIds),
             },
           },
         }),
@@ -301,7 +274,11 @@ class LocalLlmClient {
       const parsed = llmResponseSchema.parse(parseJsonContent(content));
       this.lastSuccessAt = new Date().toISOString();
       this.lastError = null;
-      return parsed;
+      return {
+        ...parsed,
+        themeDigests: Object.entries(parsed.themeDigests)
+          .map(([theme, digest]) => ({ theme, ...digest })),
+      };
     } catch (error) {
       const normalized = error.name === 'AbortError'
         ? new Error('Tempo limite ao consultar a LLM local.')

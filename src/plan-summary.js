@@ -547,13 +547,20 @@ class GovernmentPlanSummaryService {
   }
 
   publicAnalysisPayload(payload) {
-    if (!payload?.candidateObjective?.summary) return payload;
     return {
       ...payload,
-      candidateObjective: {
+      candidateObjective: payload?.candidateObjective ? {
         ...payload.candidateObjective,
         summary: completeGeneratedSentence(payload.candidateObjective.summary, 520),
-      },
+      } : payload?.candidateObjective,
+      themeSummaries: (payload?.themeSummaries || []).map((theme) => ({
+        ...theme,
+        digest: theme.digest ? {
+          ...theme.digest,
+          summary: completeGeneratedSentence(theme.digest.summary, 420),
+          potentialImpact: completeGeneratedSentence(theme.digest.potentialImpact, 280),
+        } : theme.digest,
+      })),
     };
   }
 
@@ -639,7 +646,18 @@ class GovernmentPlanSummaryService {
   async processLocalAnalysis(job) {
     await this.localLlmClient.waitUntilReady();
     const attempts = await this.analysisAttempts(job.sha256);
-    if (attempts >= 3) return;
+    if (attempts >= 3) {
+      await this.store?.saveGovernmentPlanAnalysis?.({
+        documentSha256: job.sha256,
+        analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+        status: 'FAILED',
+        model: this.config.localLlmModel,
+        promptVersion: LOCAL_LLM_PROMPT_VERSION,
+        error: 'Limite de três tentativas atingido. Os trechos oficiais permanecem disponíveis.',
+        attempts,
+      });
+      return;
+    }
     const saveProgress = async ({ stage, completed = 0, total = 1 }) => this.store?.saveGovernmentPlanAnalysis?.({
       documentSha256: job.sha256,
       analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
@@ -679,6 +697,7 @@ class GovernmentPlanSummaryService {
           client: this.localLlmClient,
           themes: THEMES,
           config: this.config,
+          candidateName: job.candidate.ballotName || job.candidate.name,
           onProgress: saveProgress,
         }),
         documentSha256: plan.sha256,

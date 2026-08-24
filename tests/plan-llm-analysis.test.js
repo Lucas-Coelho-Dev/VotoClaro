@@ -4,6 +4,7 @@ const {
   chunksFromPages,
   chunksFromEvidenceSummary,
   createLocalLlmSummary,
+  completeGeneratedSentence,
   normalizedEvidenceText,
   validatedEvidences,
 } = require('../src/plan-llm-analysis');
@@ -21,6 +22,17 @@ test('divide o documento preservando todas as páginas com texto', () => {
   assert.match(chunks[0].text, /<<<PÁGINA 1>>>/);
 });
 
+test('remove cauda incompleta sem alterar a parte substantiva da síntese', () => {
+  assert.equal(
+    completeGeneratedSentence('Aumentar o investimento em infraestrutura e tecnologia, promovendo maior.', 240),
+    'Aumentar o investimento em infraestrutura e tecnologia.',
+  );
+  assert.equal(
+    completeGeneratedSentence('Aproveitar a base industrial de defesa e investir.', 240),
+    'Aproveitar a base industrial de defesa.',
+  );
+});
+
 test('aceita somente citação que existe na página indicada', () => {
   const pages = new Map([[4, normalizedEvidenceText('Vamos ampliar escolas em tempo integral e formar professores da rede pública.')]]);
   const evidences = validatedEvidences([
@@ -30,6 +42,16 @@ test('aceita somente citação que existe na página indicada', () => {
   ], pages);
   assert.equal(evidences.length, 1);
   assert.equal(evidences[0].page, 4);
+});
+
+test('valida citação quando o extrator do PDF quebrou uma palavra com hífen entre linhas', () => {
+  const pages = new Map([[31, normalizedEvidenceText('uma uniformização com-\nportamental do estudante nas escolas públicas')]]);
+  const evidences = validatedEvidences([{
+    page: 31,
+    quote: 'uma uniformização comportamental do estudante nas escolas públicas',
+  }], pages);
+  assert.equal(evidences.length, 1);
+  assert.equal(evidences[0].page, 31);
 });
 
 test('envia à LLM somente evidências temáticas selecionadas, com página preservada', () => {
@@ -50,6 +72,18 @@ test('envia à LLM somente evidências temáticas selecionadas, com página pres
   assert.doesNotMatch(chunks[0].text, /TEXTO INTEGRAL/i);
 });
 
+test('isola cada tema em uma chamada para impedir contaminação entre assuntos', () => {
+  const fallbackSummary = summarizeExtractedPages([
+    { page: 2, text: 'A proposta pretende ampliar escolas e formar professores da rede pública.' },
+    { page: 3, text: 'O programa propõe fortalecer hospitais e ampliar a atenção básica de saúde.' },
+  ], { pages: 3 });
+  const chunks = chunksFromEvidenceSummary(fallbackSummary, 18000);
+  assert.equal(chunks.length, 2);
+  assert.deepEqual(chunks.map((chunk) => chunk.themeIds), [['educacao'], ['saude']]);
+  assert.doesNotMatch(chunks[0].text, /hospitais/i);
+  assert.doesNotMatch(chunks[1].text, /escolas/i);
+});
+
 test('não publica explicação da IA em tema diferente daquele sustentado pelo trecho', async () => {
   const pages = [{
     page: 7,
@@ -61,16 +95,11 @@ test('não publica explicação da IA em tema diferente daquele sustentado pelo 
       return {
         objective: {
           summary: 'O plano pretende ampliar o atendimento educacional. Também busca atender populaçõe',
-          evidences: [{ page: 7, quote: 'A proposta pretende ampliar escolas em tempo integral e formar professores da rede pública.' }],
+          evidenceThemes: ['educacao'],
         },
-        proposals: [{
+        themeDigests: [{
           theme: 'gestao-transparencia',
-          title: 'Gestão das escolas públicas',
           summary: 'A proposta amplia escolas e fortalece a formação de professores da rede pública.',
-          evidences: [{ page: 7, quote: 'A proposta pretende ampliar escolas em tempo integral e formar professores da rede pública.' }],
-          audience: ['estudantes'],
-          requirements: ['formação docente'],
-          missingInformation: ['custo'],
           potentialImpact: 'Pode ampliar o atendimento educacional se houver execução.',
         }],
       };
@@ -81,11 +110,11 @@ test('não publica explicação da IA em tema diferente daquele sustentado pelo 
     fallbackSummary,
     client,
     themes: THEMES,
-    config: { localLlmChunkCharacters: 18000, localLlmModel: 'qwen3-4b-local' },
+    config: { localLlmChunkCharacters: 18000, localLlmModel: 'qwen3-1.7b-local' },
   });
   const management = summary.themeSummaries.find((theme) => theme.id === 'gestao-transparencia');
   const education = summary.themeSummaries.find((theme) => theme.id === 'educacao');
-  assert.equal(management.proposals.some((proposal) => proposal.extraction === 'LOCAL_LLM_GROUNDED'), false);
+  assert.equal(management.digest, null);
   assert.equal(education.proposalCount, 1);
   assert.equal(summary.candidateObjective.summary, 'O plano pretende ampliar o atendimento educacional.');
 });
@@ -104,54 +133,27 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
   const fallbackSummary = summarizeExtractedPages(pages, { pages: 9 });
   const client = {
     async analyzeChunk(chunk) {
-      const proposals = [];
+      const themeDigests = [];
       if (chunk.pages.includes(4)) {
-        proposals.push({
+        themeDigests.push({
           theme: 'educacao',
-          title: 'Expansão do ensino em tempo integral',
-          summary: 'Ampliação das escolas em tempo integral e formação de professores da rede pública.',
-          evidences: [{ page: 4, quote: 'Vamos ampliar escolas em tempo integral e formar professores da rede pública em todas as regiões.' }],
-          audience: ['estudantes da rede pública'],
-          requirements: ['infraestrutura escolar'],
-          risks: ['execução sem profissionais suficientes'],
-          indicators: ['matrículas em tempo integral'],
-          missingInformation: ['custo total'],
-          fourYearScenario: {
-            firstYear: 'Planejamento e preparação da rede escolar.',
-            yearsTwoAndThree: 'Possível expansão gradual das escolas e da formação.',
-            fourthYear: 'A cobertura poderá crescer se houver execução e recursos.',
-            potentialImpact: 'Pode ampliar o acesso à jornada integral, condicionado à implementação.',
-          },
+          summary: 'Segundo o plano de governo, o candidato propõe ampliar escolas em tempo integral e formar professores.',
+          potentialImpact: 'Pode ampliar o acesso à jornada integral, condicionado à implementação.',
         });
       }
       if (chunk.pages.includes(9)) {
-        proposals.push({
+        themeDigests.push({
           theme: 'saude',
-          title: 'Atenção básica e hospitais regionais',
-          summary: 'Fortalecimento da atenção básica e modernização de hospitais regionais.',
-          evidences: [{ page: 9, quote: 'O programa propõe fortalecer a atenção básica e modernizar hospitais regionais para reduzir filas.' }],
-          audience: ['usuários da rede pública de saúde'],
-          requirements: ['equipes e estrutura de atendimento'],
-          risks: [],
-          indicators: ['tempo de espera'],
-          missingInformation: ['fonte dos recursos'],
-          fourYearScenario: {
-            firstYear: 'Organização das prioridades de atendimento.',
-            yearsTwoAndThree: 'Execução condicionada à capacidade da rede.',
-            fourthYear: 'Consolidação condicionada à continuidade das ações.',
-            potentialImpact: 'Pode melhorar o atendimento se as ações forem executadas.',
-          },
+          summary: 'Segundo o plano de governo, o candidato propõe fortalecer a atenção básica e modernizar hospitais regionais.',
+          potentialImpact: 'Pode melhorar o atendimento se as ações forem executadas.',
         });
       }
       return {
         objective: {
           summary: 'O plano busca ampliar serviços públicos de educação e saúde com atendimento regional.',
-          evidences: [{
-            page: 4,
-            quote: 'Vamos ampliar escolas em tempo integral e formar professores da rede pública em todas as regiões.',
-          }],
+          evidenceThemes: ['educacao', 'saude'],
         },
-        proposals,
+        themeDigests,
       };
     },
   };
@@ -162,7 +164,7 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
     themes: THEMES,
     config: {
       localLlmChunkCharacters: 2000,
-      localLlmModel: 'qwen3-4b-local',
+      localLlmModel: 'qwen3-1.7b-local',
     },
   });
   assert.equal(summary.summaryType, 'AUTOMATIC_THEMATIC_LOCAL_LLM');
@@ -171,8 +173,10 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
   assert.equal(summary.candidateObjective.evidences[0].page, 4);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').proposalCount, 1);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'saude').proposalCount, 1);
-  assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').proposals[0].evidences[0].page, 4);
-  assert.match(summary.notice, /inferências, não previsões nem garantias/i);
+  assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.evidences[0].page, 4);
+  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.summary, /O plano de governo/i);
+  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.potentialImpact, /Se implementadas, essas medidas têm este impacto possível/i);
+  assert.match(summary.notice, /hipótese condicionada.+não é previsão, garantia/i);
 });
 
 test('remove número inventado do cenário que não aparece na evidência', async () => {
@@ -185,19 +189,11 @@ test('remove número inventado do cenário que não aparece na evidência', asyn
     async analyzeChunk() {
       return { objective: {
         summary: 'O plano busca fortalecer a educação pública por meio da ampliação de escolas e formação docente.',
-        evidences: [{ page: 2, quote: 'A proposta pretende ampliar escolas e formar professores para fortalecer a educação pública.' }],
-      }, proposals: [{
+        evidenceThemes: ['educacao'],
+      }, themeDigests: [{
         theme: 'educacao',
-        title: 'Fortalecimento da educação pública',
-        summary: 'Ampliação das escolas e formação de professores.',
-        evidences: [{ page: 2, quote: 'A proposta pretende ampliar escolas e formar professores para fortalecer a educação pública.' }],
-        audience: ['2 milhões de estudantes'],
-        requirements: ['orçamento de 900 milhões'],
-        risks: [], indicators: [], missingInformation: [],
-        fourYearScenario: {
-          firstYear: 'Construção de 500 escolas.',
-          yearsTwoAndThree: '', fourthYear: '', potentialImpact: 'Atenderá 2 milhões de estudantes.',
-        },
+        summary: 'Segundo o plano de governo, o candidato propõe construir 500 escolas e formar professores.',
+        potentialImpact: 'A medida atenderá 2 milhões de estudantes.',
       }] };
     },
   };
@@ -206,11 +202,9 @@ test('remove número inventado do cenário que não aparece na evidência', asyn
     fallbackSummary,
     client,
     themes: THEMES,
-    config: { localLlmChunkCharacters: 2000, localLlmModel: 'qwen3-4b-local' },
+    config: { localLlmChunkCharacters: 2000, localLlmModel: 'qwen3-1.7b-local' },
   });
-  const proposal = summary.themeSummaries.find((theme) => theme.id === 'educacao').proposals[0];
-  assert.doesNotMatch(proposal.fourYearScenario.firstYear, /500/);
-  assert.doesNotMatch(proposal.fourYearScenario.potentialImpact, /2 milhões/);
-  assert.deepEqual(proposal.audience, []);
-  assert.deepEqual(proposal.requirements, []);
+  const digest = summary.themeSummaries.find((theme) => theme.id === 'educacao').digest;
+  assert.doesNotMatch(digest.summary, /500/);
+  assert.doesNotMatch(digest.potentialImpact, /2 milhões/);
 });

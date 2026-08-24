@@ -5,7 +5,7 @@ const {
 } = require('./local-llm');
 
 const MAX_PUBLIC_PROPOSALS_PER_THEME = 30;
-const MAX_EVIDENCES_PER_THEME = 2;
+const MAX_EVIDENCES_PER_THEME = 3;
 
 function cleanText(value, maximum = 700) {
   return String(value || '')
@@ -31,6 +31,7 @@ function uniqueStrings(values, maximumItems = 6, maximumLength = 180) {
 
 function normalizedEvidenceText(value) {
   return String(value || '')
+    .replace(/([A-Za-zÀ-ÖØ-öø-ÿ])-\s+([a-zà-öø-ÿ])/g, '$1$2')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
@@ -95,22 +96,27 @@ function chunksFromEvidenceSummary(fallbackSummary, maximumCharacters) {
   let size = 0;
   let pageNumbers = new Set();
   let evidenceCount = 0;
+  let themeIds = new Set();
   const flush = () => {
     if (!parts.length) return;
     chunks.push({
       text: parts.join('\n\n'),
       pages: [...pageNumbers].sort((left, right) => left - right),
       evidenceCount,
+      themeIds: [...themeIds],
     });
     parts = [];
     size = 0;
     pageNumbers = new Set();
     evidenceCount = 0;
+    themeIds = new Set();
   };
 
   for (const theme of fallbackSummary.themeSummaries || []) {
     const extractiveProposals = (theme.proposals || [])
       .filter((proposal) => proposal.extraction !== 'LOCAL_LLM_GROUNDED');
+    const themeParts = [];
+    const themePages = new Set();
     for (const proposal of extractiveProposals.slice(0, MAX_EVIDENCES_PER_THEME)) {
       const page = Number(proposal.page);
       const text = cleanText(proposal.text, 680);
@@ -121,15 +127,119 @@ function chunksFromEvidenceSummary(fallbackSummary, maximumCharacters) {
         section ? `Seção extraída: ${section}` : '',
         text,
       ].filter(Boolean).join('\n');
-      if (parts.length && size + marked.length > maximumCharacters) flush();
-      parts.push(marked);
-      size += marked.length;
-      evidenceCount += 1;
-      pageNumbers.add(page);
+      themeParts.push(marked);
+      themePages.add(page);
     }
+    if (!themeParts.length) continue;
+    const themeBlock = themeParts.join('\n\n');
+    if (parts.length && size + themeBlock.length > maximumCharacters) flush();
+    parts.push(themeBlock);
+    size += themeBlock.length;
+    evidenceCount += themeParts.length;
+    themeIds.add(theme.id);
+    for (const page of themePages) pageNumbers.add(page);
+    flush();
   }
   flush();
   return chunks;
+}
+
+function rawThemeEvidences(theme, fallbackSummary, pagesByNumber) {
+  const fallbackTheme = fallbackSummary.themeSummaries?.find((item) => item.id === theme.id);
+  return validatedEvidences((fallbackTheme?.proposals || [])
+    .filter((proposal) => proposal.extraction !== 'LOCAL_LLM_GROUNDED')
+    .slice(0, MAX_EVIDENCES_PER_THEME)
+    .map((proposal) => ({ page: proposal.page, quote: proposal.text })), pagesByNumber);
+}
+
+function sanitizeThemeDigest(raw, theme, pagesByNumber, fallbackSummary, candidateName) {
+  const evidences = rawThemeEvidences(theme, fallbackSummary, pagesByNumber);
+  if (!evidences.length) return null;
+  const publicName = cleanText(candidateName, 100) || 'a candidatura';
+  const stripLead = (value) => cleanText(value, 300)
+    .replace(/^(?:segundo o plano de governo[, :]*)?/iu, '')
+    .replace(new RegExp(`^(?:${publicName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|NOME|o candidato|a candidatura)\\s+(?:pretende|propõe|quer)\\s+`, 'iu'), '')
+    .replace(/^(?:pretende|propõe|quer)\s+/iu, '')
+    .replace(/[.!?…]+$/u, '')
+    .trim();
+  const action = stripLead(raw?.summary) || 'executar as ações descritas nos três trechos oficiais deste tema';
+  const rawEffect = stripLead(raw?.potentialImpact)
+    .replace(/^(?:se implementadas[, ]*)?(?:essas|as) medidas podem\s+/iu, '');
+  const themeEffects = {
+    educacao: 'alterar a disciplina escolar, o financiamento e a oferta educacional',
+    'emprego-economia': 'estimular atividade econômica, investimento e geração de trabalho',
+    'tecnologia-inovacao': 'ampliar a capacidade tecnológica e produtiva do país',
+    'gestao-transparencia': 'mudar a organização do Estado e o controle da gestão pública',
+    saude: 'ampliar o acesso e a capacidade de atendimento em saúde',
+    'mobilidade-infraestrutura': 'melhorar deslocamentos, logística e infraestrutura disponível',
+    'protecao-social': 'alterar a proteção e o atendimento de grupos vulneráveis',
+    'cultura-esporte-turismo': 'ampliar acesso, atividade econômica e participação nessas áreas',
+    'seguranca-publica': 'reforçar prevenção, investigação e resposta ao crime organizado',
+  };
+  const fallbackEffect = themeEffects[theme.id] || 'produzir mudanças neste tema ao longo do mandato';
+  const effect = !rawEffect || similarity(action, rawEffect) >= 0.72 ? fallbackEffect : rawEffect;
+  const evidenceText = evidences.map((evidence) => evidence.quote).join(' ');
+  const groundedAction = similarity(action, evidenceText) >= 0.1
+    ? action
+    : completeGeneratedSentence(evidences[0].quote, 190);
+  const summaryText = completeGeneratedSentence(
+    `O plano de governo de ${publicName} apresenta esta direção: ${groundedAction}`,
+    390,
+  );
+  const impactText = completeGeneratedSentence(
+    `Se implementadas, essas medidas têm este impacto possível: ${effect}`,
+    260,
+  );
+  return {
+    summary: safeGeneratedText(
+      summaryText,
+      evidences,
+      'Os trechos oficiais deste tema foram preservados abaixo, mas a síntese da IA não pôde ser validada com segurança.',
+      420,
+    ),
+    potentialImpact: safeGeneratedText(
+      impactText,
+      evidences,
+      'Os possíveis efeitos dependem da execução, dos recursos disponíveis e de decisões que o documento pode não detalhar.',
+      240,
+    ),
+    evidences,
+    pages: [...new Set(evidences.map((evidence) => evidence.page))].sort((left, right) => left - right),
+    grounding: 'THREE_THEME_EXCERPTS_VALIDATED_AGAINST_PDF_TEXT',
+  };
+}
+
+function attachThemeDigests(rawDigests, themes, pagesByNumber, fallbackSummary, candidateName) {
+  return (fallbackSummary.themeSummaries || []).map((fallbackTheme) => {
+    const theme = themes.find((item) => item.id === fallbackTheme.id);
+    if (!theme) return fallbackTheme;
+    const candidates = rawDigests
+      .filter((item) => item?.theme === theme.id)
+      .map((item) => sanitizeThemeDigest(item, theme, pagesByNumber, fallbackSummary, candidateName))
+      .filter(Boolean)
+      .sort((left, right) => right.summary.length - left.summary.length);
+    return { ...fallbackTheme, digest: candidates[0] || null };
+  });
+}
+
+function sanitizeObjectiveFromThemes(raw, themes, pagesByNumber, fallbackSummary) {
+  const evidences = (Array.isArray(raw?.evidenceThemes) ? raw.evidenceThemes : [])
+    .map((themeId) => themes.find((theme) => theme.id === themeId))
+    .filter(Boolean)
+    .flatMap((theme) => rawThemeEvidences(theme, fallbackSummary, pagesByNumber).slice(0, 1));
+  const uniqueEvidences = mergeUniqueEvidences([], evidences).slice(0, 2);
+  if (!uniqueEvidences.length) return null;
+  return {
+    summary: safeGeneratedText(
+      raw?.summary,
+      uniqueEvidences,
+      'O objetivo central não pôde ser explicado sem acrescentar informações que não constam nos trechos validados.',
+      420,
+    ),
+    evidences: uniqueEvidences,
+    pages: [...new Set(uniqueEvidences.map((evidence) => evidence.page))].sort((left, right) => left - right),
+    grounding: 'THEME_EXCERPTS_VALIDATED_AGAINST_PDF_TEXT',
+  };
 }
 
 function numberTokens(value) {
@@ -147,10 +257,15 @@ function hasUnsupportedNumber(value, evidences) {
 
 function completeGeneratedSentence(value, maximum) {
   const cleaned = cleanText(value, maximum);
-  if (!cleaned || /[.!?…]$/u.test(cleaned)) return cleaned;
-  const lastBoundary = Math.max(cleaned.lastIndexOf('.'), cleaned.lastIndexOf('!'), cleaned.lastIndexOf('?'));
-  if (lastBoundary >= Math.floor(cleaned.length * 0.35)) return cleaned.slice(0, lastBoundary + 1).trim();
-  const withoutPartialWord = cleaned.replace(/\s+\S*$/u, '').trim();
+  if (!cleaned) return cleaned;
+  const withoutDanglingEnd = cleaned
+    .replace(/,\s*(?:ampliando|aumentando|fortalecendo|integrando|promovendo|reduzindo)\s+(?:maior|mais|a|o|as|os)?\s*([.!?…])$/iu, '$1')
+    .replace(/\s+e\s+(?:ampliar|aumentar|fortalecer|integrar|investir|promover|reduzir)\s*([.!?…])$/iu, '$1')
+    .replace(/\s+(?:a|ao|aos|as|com|da|das|de|do|dos|e|em|na|nas|no|nos|o|os|para|por)\s*([.!?…])$/iu, '$1');
+  if (/[.!?…]$/u.test(withoutDanglingEnd)) return withoutDanglingEnd;
+  const lastBoundary = Math.max(withoutDanglingEnd.lastIndexOf('.'), withoutDanglingEnd.lastIndexOf('!'), withoutDanglingEnd.lastIndexOf('?'));
+  if (lastBoundary >= Math.floor(withoutDanglingEnd.length * 0.35)) return withoutDanglingEnd.slice(0, lastBoundary + 1).trim();
+  const withoutPartialWord = withoutDanglingEnd.replace(/\s+\S*$/u, '').trim();
   return withoutPartialWord ? `${withoutPartialWord}.` : cleaned;
 }
 
@@ -371,26 +486,35 @@ function mergeFallbackThemes(explainedThemes, fallbackSummary) {
   });
 }
 
-async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, config, onProgress }) {
+async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, config, candidateName, onProgress }) {
   const chunks = chunksFromEvidenceSummary(fallbackSummary, config.localLlmChunkCharacters);
   if (!chunks.length) throw new Error('O PDF não contém texto suficiente para a análise local.');
-  const rawProposals = [];
+  const rawThemeDigests = [];
   const rawObjectives = [];
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
     await onProgress?.({ stage: 'EXPLAINING', completed: index, total: chunks.length });
-    const result = await client.analyzeChunk(chunk);
-    rawProposals.push(...result.proposals);
+    let result;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        result = await client.analyzeChunk(chunk, { candidateName });
+        break;
+      } catch (error) {
+        const transient = /fetch failed|econnreset|socket|network|conexão|connection/iu.test(String(error?.message || error));
+        if (!transient || attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+      }
+    }
+    rawThemeDigests.push(...result.themeDigests);
     rawObjectives.push(result.objective);
     await onProgress?.({ stage: 'EXPLAINING', completed: index + 1, total: chunks.length });
   }
   const pagesByNumber = new Map(pages.map((page) => [Number(page.page), normalizedEvidenceText(page.text)]));
-  const explainedThemes = consolidateByTheme(rawProposals, themes, pagesByNumber, fallbackSummary);
-  const themeSummaries = mergeFallbackThemes(explainedThemes, fallbackSummary);
-  const explainedThemeCount = explainedThemes.filter((theme) => theme.status === 'FOUND').length;
+  const themeSummaries = attachThemeDigests(rawThemeDigests, themes, pagesByNumber, fallbackSummary, candidateName);
+  const explainedThemeCount = themeSummaries.filter((theme) => theme.digest).length;
   const foundThemes = themeSummaries.filter((theme) => theme.status === 'FOUND');
   const candidateObjective = rawObjectives
-    .map((objective) => sanitizeObjective(objective, pagesByNumber))
+    .map((objective) => sanitizeObjectiveFromThemes(objective, themes, pagesByNumber, fallbackSummary))
     .filter(Boolean)
     .sort((left, right) => right.evidences.length - left.evidences.length)[0] || null;
   const generatedAt = new Date().toISOString();
@@ -403,15 +527,15 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
       id, label, status, proposalCount, mentions: mentionCount,
     })),
     mainPoints: foundThemes.map((theme) => ({
-      id: theme.proposals[0].id,
+      id: theme.proposals[0]?.id || theme.id,
       title: theme.label,
-      ...theme.proposals[0],
+      ...(theme.digest || theme.proposals[0]),
     })),
     candidateObjective,
     overview: explainedThemeCount
-      ? `A IA explicou propostas representativas em ${explainedThemeCount} de ${themes.length} temas. Os demais trechos localizados no PDF continuam disponíveis sem reescrita.`
+      ? `A IA resumiu os três trechos mais representativos em ${explainedThemeCount} de ${themes.length} temas. As páginas oficiais usadas continuam disponíveis para conferência.`
       : fallbackSummary.overview,
-    notice: 'A IA local explica evidências selecionadas do PDF oficial e apresenta cenários condicionais para quatro anos. Toda síntese mantém citações e páginas conferidas no texto extraído. Públicos afetados, dependências, efeitos, riscos e etapas são inferências, não previsões nem garantias. Números só podem ser reproduzidos quando constam nas evidências.',
+    notice: 'A IA local resume até três trechos selecionados em cada tema e apresenta um impacto possível para quatro anos. As páginas e os trechos oficiais permanecem visíveis. O impacto é uma hipótese condicionada à execução, aos recursos e à regulamentação; não é previsão, garantia nem avaliação de viabilidade.',
     generatedAt,
     aiAnalysis: {
       status: 'READY',
@@ -427,8 +551,8 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
     },
     methodology: {
       ...fallbackSummary.methodology,
-      pageReadingRule: 'A leitura determinística percorre o PDF e seleciona trechos representativos por tema; a IA recebe somente esse conjunto curto de evidências, sempre com o número da página.',
-      consolidationRule: 'A IA explica até três propostas prioritárias, no máximo uma por tema. Trechos adicionais permanecem disponíveis sem reescrita, e cada explicação mantém ao menos uma citação validada no PDF.',
+      pageReadingRule: 'A leitura determinística percorre o PDF e seleciona até três trechos representativos por tema. A IA processa um tema por vez e recebe somente os trechos daquele assunto, sempre com o número da página.',
+      consolidationRule: 'A IA produz uma síntese por tema a partir de até três trechos selecionados pelo extrator. Os três trechos continuam visíveis e ligados às respectivas páginas do PDF.',
       impactRule: 'O cenário de quatro anos é condicional e qualitativo. Não representa previsão, promessa de resultado, avaliação de viabilidade ou recomendação eleitoral.',
       displayRule: 'A interface apresenta três propostas por vez, sem limitar a leitura das demais propostas consolidadas.',
     },
