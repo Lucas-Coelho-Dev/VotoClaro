@@ -62,7 +62,7 @@ const THEMES = Object.freeze([
 const ACTION_TERMS = [
   'ampli*', 'assegur*', 'aumentar', 'capacit*', 'constru*', 'criar', 'criacao', 'defender', 'defendemos',
   'desenvolv*', 'destin*', 'estabelec*', 'estimular', 'expandir', 'fomentar', 'fortalec*',
-  'garant*', 'implant*', 'implement*', 'incentiv*', 'integr*', 'invest*', 'moderniz*',
+  'garant*', 'implant*', 'implement*', 'incentiv*', 'institu*', 'integr*', 'invest*', 'moderniz*',
   'oferecer', 'pretend*', 'prioriz*', 'promov*', 'propomos', 'propor', 'qualific*', 'recuper*', 'reduz*',
   'reform*', 'regulament*', 'universaliz*', 'combat*', 'desarticul*', 'enfrent*', 'preven*', 'reprim*',
   'meta', 'objetivo', 'programa', 'projeto', 'proposta',
@@ -101,6 +101,14 @@ const PRESERVED_EX_HYPHEN_TARGETS = new Set([
   'prefeito', 'prefeita', 'presidente', 'secretario', 'secretaria', 'senador', 'senadora', 'socio', 'socia',
 ]);
 
+// PDF font maps sometimes split the first letter from a proposal verb. We
+// only join known words so ordinary phrases such as "A proposta" remain
+// untouched.
+const PDF_SPLIT_INITIAL_WORDS = new Set([
+  'implementar', 'implantacao', 'implantacoes', 'implantar', 'incentivar', 'integrar', 'investir',
+  'instituicao', 'instituicoes', 'instituir',
+]);
+
 function searchable(value) {
   return String(value || '')
     .normalize('NFD')
@@ -125,21 +133,51 @@ function joinPdfHyphenatedWord(left, right) {
   return preserveHyphen ? `${left}-${right}` : `${left}${right}`;
 }
 
+function joinKnownSplitInitialWord(match, initial, remainder) {
+  const joined = `${initial}${remainder}`;
+  return PDF_SPLIT_INITIAL_WORDS.has(normalizedWord(joined)) ? joined : match;
+}
+
 function normalizePdfText(value) {
   return String(value || '')
     .normalize('NFC')
     // Keep line breaks, but discard codes that cannot represent visible text.
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
+    // Embedded icon fonts can be decoded as a short false token such as
+    // "Co☼" before the actual text. Remove the complete malformed token at a
+    // sentence/line boundary instead of leaving its letters in the proposal.
+    .replace(/(^|[\n.!?;]\s*)[\p{L}\p{N}]{0,4}[\p{So}\p{Co}\uFFFD][\p{L}\p{N}\p{So}\p{Co}\uFFFD]{0,4}\s*/gu, '$1')
     .replace(/[\p{Cf}\p{Co}\uFFFD\uFFF0-\uFFFF]/gu, ' ')
+    // Other pictographic glyphs are layout markers, not proposal content.
+    .replace(/\p{So}/gu, ' ')
     .replace(/\r\n?/g, '\n')
     .replace(/(\p{Lu}{2,})-[ \t]*\n[ \t]*(\p{Lu}{2,})/gu, '$1$2')
     .replace(/(\p{L}[\p{L}\p{M}]{1,})-[ \t]*\n[ \t]*(\p{Ll}[\p{L}\p{M}]*)/gu,
       (match, left, right) => joinPdfHyphenatedWord(left, right))
     .replace(/(?<![A-ZÀ-ÖØ-Ý])[A-ZÀ-ÖØ-Ý](?: [A-ZÀ-ÖØ-Ý])+(?![A-ZÀ-ÖØ-Ý])/gu, (match) => match.replace(/ /g, ''))
+    .replace(/\b(\p{Lu})[ \t]+(\p{Ll}[\p{L}\p{M}]{2,})\b/gu, joinKnownSplitInitialWord)
     .replace(/[\t\f\v]+/g, ' ')
     .replace(/ +/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function normalizePublicProposal(proposal) {
+  if (!proposal || typeof proposal !== 'object') return proposal;
+  const normalized = { ...proposal };
+  for (const field of ['text', 'title', 'summary', 'potentialImpact', 'conditionsAndLimits', 'section']) {
+    if (typeof normalized[field] === 'string') normalized[field] = normalizePdfText(normalized[field]);
+  }
+  for (const field of ['audience', 'requirements', 'indicators']) {
+    if (Array.isArray(normalized[field])) normalized[field] = normalized[field].map(normalizePdfText).filter(Boolean);
+  }
+  if (Array.isArray(normalized.evidences)) {
+    normalized.evidences = normalized.evidences.map((evidence) => ({
+      ...evidence,
+      quote: typeof evidence?.quote === 'string' ? normalizePdfText(evidence.quote) : evidence?.quote,
+    }));
+  }
+  return normalized;
 }
 
 function cleanSentenceStart(value) {
@@ -552,12 +590,14 @@ class GovernmentPlanSummaryService {
   publicAnalysisPayload(payload) {
     const themeSummaries = (payload?.themeSummaries || []).map((theme) => ({
       ...theme,
-      digest: theme.digest ? {
+      proposals: (theme.proposals || []).map(normalizePublicProposal),
+      sections: (theme.sections || []).map(normalizePdfText).filter(Boolean),
+      digest: theme.digest ? normalizePublicProposal({
         ...theme.digest,
         summary: completeGeneratedSentence(theme.digest.summary, 540),
         potentialImpact: completeGeneratedSentence(theme.digest.potentialImpact, 560),
         conditionsAndLimits: completeGeneratedSentence(theme.digest.conditionsAndLimits, 420),
-      } : theme.digest,
+      }) : theme.digest,
     }));
     return {
       ...payload,
@@ -569,7 +609,7 @@ class GovernmentPlanSummaryService {
   async withAnalysisState(sha256, summary, storedAnalysis = undefined) {
     if (!summary) return null;
     if (!this.localLlmClient?.isEnabled()) {
-      return { ...summary, aiAnalysis: { status: 'DISABLED', local: true } };
+      return { ...this.publicAnalysisPayload(summary), aiAnalysis: { status: 'DISABLED', local: true } };
     }
     const stored = storedAnalysis === undefined
       ? await this.store?.getGovernmentPlanAnalysis?.(sha256, LOCAL_LLM_ANALYSIS_VERSION)
@@ -581,7 +621,7 @@ class GovernmentPlanSummaryService {
       && summary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return this.publicAnalysisPayload(summary);
     const progress = stored?.payload?.aiAnalysis || {};
     return {
-      ...summary,
+      ...this.publicAnalysisPayload(summary),
       aiAnalysis: {
         status: stored?.status || 'QUEUED',
         local: true,

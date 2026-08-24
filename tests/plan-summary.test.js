@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { summarizeExtractedPages, normalizePdfText, THEMES } = require('../src/plan-summary');
+const {
+  GovernmentPlanSummaryService,
+  summarizeExtractedPages,
+  normalizePdfText,
+  THEMES,
+} = require('../src/plan-summary');
 
 const pages = [
   { page: 3, text: '1. EDUCAÇÃO\nA proposta estabelece a criação de novas escolas de ensino integral e a formação continuada de professores da rede pública.' },
@@ -100,6 +105,31 @@ test('remove códigos de fonte inválidos sem apagar o texto legível', () => {
     normalizePdfText('\u001f\u001e\u001d\u001c Bolsa Família para crianças e adolescentes.'),
     'Bolsa Família para crianças e adolescentes.',
   );
+});
+
+test('remove marcador de fonte pictográfico e recompõe o verbo cortado', () => {
+  const malformed = 'Co☼ I nstituir o Programa Estadual de Educadores Ambientais Comunitários para formar e apoiar agentes populares de educação ambiental.';
+  const expected = 'Instituir o Programa Estadual de Educadores Ambientais Comunitários para formar e apoiar agentes populares de educação ambiental.';
+  assert.equal(normalizePdfText(malformed), expected);
+  assert.equal(normalizePdfText('A proposta pretende ampliar escolas.'), 'A proposta pretende ampliar escolas.');
+});
+
+test('corrige o caractere inválido também em análises já armazenadas', () => {
+  const service = Object.create(GovernmentPlanSummaryService.prototype);
+  const cleaned = service.publicAnalysisPayload({
+    themeSummaries: [{
+      id: 'educacao',
+      label: 'Educação',
+      sections: ['Co☼ I nstituir'],
+      proposals: [{
+        text: 'Co☼ I nstituir o Programa Estadual de Educadores Ambientais Comunitários.',
+        evidences: [{ page: 4, quote: 'Co☼ I nstituir o Programa Estadual.' }],
+      }],
+    }],
+  });
+  assert.equal(cleaned.themeSummaries[0].proposals[0].text, 'Instituir o Programa Estadual de Educadores Ambientais Comunitários.');
+  assert.equal(cleaned.themeSummaries[0].proposals[0].evidences[0].quote, 'Instituir o Programa Estadual.');
+  assert.equal(cleaned.themeSummaries[0].sections[0], 'Instituir');
 });
 
 test('remove número de página isolado antes do primeiro parágrafo', () => {
