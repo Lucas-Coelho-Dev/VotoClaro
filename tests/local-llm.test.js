@@ -28,7 +28,8 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
               },
               themeDigests: { educacao: {
                 summary: 'Segundo o plano de governo, o candidato propõe ampliar o ensino em tempo integral na rede pública.',
-                potentialImpact: 'A medida pode ampliar o atendimento, se houver execução e recursos disponíveis.',
+                potentialImpact: 'A ampliação pode aumentar o tempo diário de atendimento dos estudantes e alterar a rotina das famílias que hoje organizam trabalho e cuidado conforme o horário escolar, se houver execução, profissionais e recursos.',
+                conditionsAndLimits: 'Os trechos não informam o orçamento, a quantidade de escolas alcançadas nem o cronograma de implantação.',
               } },
             }),
           },
@@ -63,6 +64,10 @@ test('consulta somente o servidor local e exige resposta estruturada', async (co
     true,
   );
   assert.equal(
+    received.response_format.json_schema.schema.properties.themeDigests.properties.educacao.required.includes('conditionsAndLimits'),
+    true,
+  );
+  assert.equal(
     received.response_format.json_schema.schema.properties.themeDigests.properties.educacao.required.includes('fourYearScenario'),
     false,
   );
@@ -91,7 +96,8 @@ test('mantém respostas longas vivas por transmissão contínua', async (context
         },
         themeDigests: { educacao: {
           summary: 'Segundo o plano de governo, o candidato propõe ampliar escolas e fortalecer a educação pública.',
-          potentialImpact: 'A medida pode aproximar o atendimento da população, se for implementada.',
+          potentialImpact: 'A ampliação das escolas pode aproximar o atendimento educacional das famílias e mudar a rotina de estudantes e responsáveis, desde que a medida seja implementada com profissionais, estrutura e recursos.',
+          conditionsAndLimits: 'Os trechos selecionados não detalham as regiões atendidas, o custo nem como o resultado educacional será medido.',
         } },
       });
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });

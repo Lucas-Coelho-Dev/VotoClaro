@@ -1,7 +1,7 @@
 const { z } = require('zod');
 
-const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v14';
-const LOCAL_LLM_PROMPT_VERSION = 'government-plan-theme-digest-v14';
+const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v16';
+const LOCAL_LLM_PROMPT_VERSION = 'government-plan-theme-explanation-v16';
 const LEGISLATIVE_LLM_ANALYSIS_VERSION = 'legislative-plain-language-v3';
 const LEGISLATIVE_LLM_PROMPT_VERSION = 'legislative-fine-print-v3';
 
@@ -11,8 +11,9 @@ const objectiveSchema = z.object({
 });
 
 const themeDigestSchema = z.object({
-  summary: z.string().trim().min(30).max(140),
-  potentialImpact: z.string().trim().min(15).max(80),
+  summary: z.string().trim().min(90).max(420),
+  potentialImpact: z.string().trim().min(140).max(520),
+  conditionsAndLimits: z.string().trim().min(80).max(380),
 });
 
 const llmResponseSchema = z.object({
@@ -64,10 +65,11 @@ function responseJsonSchema(themeIds) {
         properties: Object.fromEntries(themeIds.map((themeId) => [themeId, {
           type: 'object',
           additionalProperties: false,
-          required: ['summary', 'potentialImpact'],
+          required: ['summary', 'potentialImpact', 'conditionsAndLimits'],
           properties: {
-            summary: { type: 'string', minLength: 30, maxLength: 140 },
-            potentialImpact: { type: 'string', minLength: 15, maxLength: 80 },
+            summary: { type: 'string', minLength: 90, maxLength: 420 },
+            potentialImpact: { type: 'string', minLength: 140, maxLength: 520 },
+            conditionsAndLimits: { type: 'string', minLength: 80, maxLength: 380 },
           },
         }])),
       },
@@ -296,15 +298,16 @@ class LocalLlmClient {
       'Depois produza exatamente uma síntese para cada TEMA SUGERIDO presente no texto.',
       'Em themeDigests, preencha obrigatoriamente cada chave de tema fornecida; não use uma lista.',
       'Em cada síntese, reúna as ações concretas dos até três trechos daquele mesmo tema; nunca misture temas.',
-      'No summary, não escreva o nome nem introduções; comece diretamente com um verbo no infinitivo que resuma as ações.',
+      'No summary, explique em duas frases o que mudaria na estrutura, no serviço ou na política pública. Inclua pelo menos duas ações ou características concretas dos trechos. Não escreva o nome nem introduções.',
       'Não repita os trechos literalmente e não crie uma quarta proposta.',
       'Não invente números, custos, prazos, beneficiários ou resultados.',
       'Escreva para uma pessoa comum: frases curtas, concretas, enriquecedoras e sem jargão.',
-      'Cada summary deve ter no máximo 110 caracteres e terminar com ponto final.',
-      'No potentialImpact, não repita a proposta nem o nome; comece com um verbo no infinitivo e descreva somente o efeito possível.',
-      'Cada potentialImpact deve ter no máximo 60 caracteres e terminar com ponto final.',
+      'No potentialImpact, não repita a proposta. Explique a cadeia causal completa: quem administraria, prestaria, receberia ou usaria a política; o que mudaria no serviço, na regra ou na distribuição de recursos; e como isso poderia aparecer na vida cotidiana.',
+      'Use os grupos citados nos trechos. Não prometa desenvolvimento, melhoria, eficiência ou redução se a relação não estiver explicada pelas evidências.',
+      'Em conditionsAndLimits, cite pelo menos três dúvidas concretas que os trechos selecionados não resolvem sobre execução, orçamento, transição, alcance, critérios ou medição. Fale dos trechos, não do documento inteiro.',
+      'Cada campo pode ter duas ou três frases curtas e deve terminar com pontuação completa.',
       'Não use algarismos que não estejam nos trechos fornecidos.',
-      'Seja conciso para cobrir todos os temas com pouco texto.',
+      'Não use as expressões promover desenvolvimento, gerar benefícios, melhorar a sociedade, promover eficiência ou maior eficiência.',
       'Responda apenas no JSON solicitado.',
     ].join(' ');
     const user = `NOME: ${candidateName}\n\nTEMAS DESTE BLOCO:\n${themeList}\n\nATÉ TRÊS TRECHOS POR TEMA, EXTRAÍDOS DO PDF OFICIAL E MARCADOS COM A PÁGINA:\n${chunk.text}`;

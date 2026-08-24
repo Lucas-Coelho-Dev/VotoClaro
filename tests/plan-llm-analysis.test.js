@@ -101,6 +101,7 @@ test('não publica explicação da IA em tema diferente daquele sustentado pelo 
           theme: 'gestao-transparencia',
           summary: 'A proposta amplia escolas e fortalece a formação de professores da rede pública.',
           potentialImpact: 'Pode ampliar o atendimento educacional se houver execução.',
+          conditionsAndLimits: 'Os trechos não detalham o orçamento nem o cronograma de execução.',
         }],
       };
     },
@@ -137,15 +138,17 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
       if (chunk.pages.includes(4)) {
         themeDigests.push({
           theme: 'educacao',
-          summary: 'Segundo o plano de governo, o candidato propõe ampliar escolas em tempo integral e formar professores.',
-          potentialImpact: 'Pode ampliar o acesso à jornada integral, condicionado à implementação.',
+          summary: 'Ampliar escolas em tempo integral e formar professores para modificar a oferta educacional da rede pública.',
+          potentialImpact: 'A jornada integral pode aumentar o tempo de permanência dos estudantes na escola e mudar a rotina das famílias, se houver vagas e profissionais.',
+          conditionsAndLimits: 'Os trechos não indicam quantas escolas seriam atendidas, quanto custaria a expansão nem como a aprendizagem seria medida.',
         });
       }
       if (chunk.pages.includes(9)) {
         themeDigests.push({
           theme: 'saude',
-          summary: 'Segundo o plano de governo, o candidato propõe fortalecer a atenção básica e modernizar hospitais regionais.',
-          potentialImpact: 'Pode melhorar o atendimento se as ações forem executadas.',
+          summary: 'Fortalecer a atenção básica e modernizar hospitais regionais para modificar a organização do atendimento de saúde.',
+          potentialImpact: 'A reorganização pode aproximar o primeiro atendimento da população e mudar o fluxo até os hospitais, se as ações forem executadas.',
+          conditionsAndLimits: 'Os trechos não detalham o orçamento, as unidades alcançadas nem os indicadores usados para acompanhar as filas.',
         });
       }
       return {
@@ -174,9 +177,47 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').proposalCount, 1);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'saude').proposalCount, 1);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.evidences[0].page, 4);
-  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.summary, /O plano de governo/i);
-  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.potentialImpact, /Se implementadas, essas medidas têm este impacto possível/i);
-  assert.match(summary.notice, /hipótese condicionada.+não é previsão, garantia/i);
+  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.summary, /Ampliar escolas/i);
+  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.potentialImpact, /rotina das famílias/i);
+  assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.conditionsAndLimits, /quanto custaria/i);
+  assert.match(summary.notice, /hipótese causal condicionada.+não é previsão, garantia/i);
+});
+
+test('explica o caminho social e as lacunas sem repetir a proposta de cultura', async () => {
+  const pages = [{
+    page: 28,
+    text: 'Não devemos optar por eliminar o fomento à cultura, porque isso pode prejudicar artistas, grupos culturais e associações. Propomos fundir o Ministério da Cultura com o Ministério da Educação para integrar essas dimensões da formação.',
+  }];
+  const fallbackSummary = summarizeExtractedPages(pages, { pages: 28 });
+  const client = {
+    async analyzeChunk() {
+      return {
+        objective: {
+          summary: 'O plano pretende reorganizar áreas do governo e preservar políticas públicas consideradas prioritárias.',
+          evidenceThemes: ['cultura-esporte-turismo'],
+        },
+        themeDigests: [{
+          theme: 'cultura-esporte-turismo',
+          summary: 'Manter o fomento cultural e reunir Cultura e Educação em um mesmo ministério. A mudança concentraria a gestão dessas políticas em uma única estrutura federal.',
+          potentialImpact: 'Artistas, grupos culturais e associações poderiam continuar disputando apoio público, enquanto escolas e políticas culturais poderiam ser coordenadas pela mesma administração. O efeito cotidiano dependeria dos programas preservados e da prioridade dada a cada área.',
+          conditionsAndLimits: 'Os trechos não explicam como seria a transição entre ministérios, qual orçamento permaneceria reservado à cultura nem quais critérios definiriam o acesso ao fomento.',
+        }],
+      };
+    },
+  };
+  const summary = await createLocalLlmSummary({
+    pages,
+    fallbackSummary,
+    client,
+    themes: THEMES,
+    candidateName: 'RENAN SANTOS',
+    config: { localLlmChunkCharacters: 2000, localLlmModel: 'qwen3-1.7b-local' },
+  });
+  const digest = summary.themeSummaries.find((theme) => theme.id === 'cultura-esporte-turismo').digest;
+  assert.match(digest.summary, /Manter o fomento cultural/i);
+  assert.match(digest.potentialImpact, /Artistas, grupos culturais e associações/i);
+  assert.match(digest.conditionsAndLimits, /transição entre ministérios/i);
+  assert.doesNotMatch(`${digest.summary} ${digest.potentialImpact}`, /promovendo desenvolvimento/i);
 });
 
 test('remove número inventado do cenário que não aparece na evidência', async () => {
@@ -194,6 +235,7 @@ test('remove número inventado do cenário que não aparece na evidência', asyn
         theme: 'educacao',
         summary: 'Segundo o plano de governo, o candidato propõe construir 500 escolas e formar professores.',
         potentialImpact: 'A medida atenderá 2 milhões de estudantes.',
+        conditionsAndLimits: 'Os trechos não detalham o custo nem o cronograma da implementação.',
       }] };
     },
   };

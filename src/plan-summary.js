@@ -560,8 +560,9 @@ class GovernmentPlanSummaryService {
         ...theme,
         digest: theme.digest ? {
           ...theme.digest,
-          summary: completeGeneratedSentence(theme.digest.summary, 420),
-          potentialImpact: completeGeneratedSentence(theme.digest.potentialImpact, 280),
+          summary: completeGeneratedSentence(theme.digest.summary, 540),
+          potentialImpact: completeGeneratedSentence(theme.digest.potentialImpact, 560),
+          conditionsAndLimits: completeGeneratedSentence(theme.digest.conditionsAndLimits, 420),
         } : theme.digest,
       })),
     };

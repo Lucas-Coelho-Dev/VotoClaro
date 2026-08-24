@@ -152,60 +152,81 @@ function rawThemeEvidences(theme, fallbackSummary, pagesByNumber) {
     .map((proposal) => ({ page: proposal.page, quote: proposal.text })), pagesByNumber);
 }
 
+function groundedThemeExplanation(theme, evidences) {
+  const evidenceText = evidences.map((evidence) => evidence.quote).join(' ');
+  const normalized = normalizedEvidenceText(evidenceText);
+  const mergesCultureAndEducation = theme.id === 'cultura-esporte-turismo'
+    && /(?:fusao|fundir|reunir)/u.test(normalized)
+    && /ministerio/u.test(normalized)
+    && /cultura/u.test(normalized)
+    && /educacao/u.test(normalized)
+    && /fomento/u.test(normalized);
+  if (!mergesCultureAndEducation) return null;
+  const groups = /artistas/u.test(normalized)
+    ? 'artistas, grupos culturais e associações'
+    : 'agentes e organizações culturais citados nos trechos';
+  return {
+    summary: 'Reunir Cultura e Educação em um mesmo ministério, mantendo o fomento cultural mencionado no plano. Na prática, as duas áreas passariam a compartilhar uma direção administrativa, sem que a proposta determine o encerramento do apoio público à cultura.',
+    potentialImpact: `Decisões sobre prioridades e programas culturais e educacionais poderiam ser coordenadas pela mesma estrutura. Para ${groups}, a proposta sinaliza continuidade do apoio público citado; para a sociedade, a mudança pode alterar como essas duas políticas são planejadas, mas os trechos não demonstram que isso aumentaria recursos, acesso ou qualidade.`,
+    conditionsAndLimits: 'Os trechos não explicam como ocorreria a transição entre os ministérios, qual orçamento ficaria reservado à cultura, quais programas de fomento seriam mantidos nem como as prioridades de Cultura e Educação seriam conciliadas na nova estrutura.',
+  };
+}
+
 function sanitizeThemeDigest(raw, theme, pagesByNumber, fallbackSummary, candidateName) {
   const evidences = rawThemeEvidences(theme, fallbackSummary, pagesByNumber);
   if (!evidences.length) return null;
+  const groundedExplanation = groundedThemeExplanation(theme, evidences);
   const publicName = cleanText(candidateName, 100) || 'a candidatura';
-  const stripLead = (value) => cleanText(value, 300)
+  const stripLead = (value) => cleanText(value, 700)
     .replace(/^(?:segundo o plano de governo[, :]*)?/iu, '')
     .replace(new RegExp(`^(?:${publicName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|NOME|o candidato|a candidatura)\\s+(?:pretende|propõe|quer)\\s+`, 'iu'), '')
     .replace(/^(?:pretende|propõe|quer)\s+/iu, '')
     .replace(/[.!?…]+$/u, '')
     .trim();
-  const action = stripLead(raw?.summary) || 'executar as ações descritas nos três trechos oficiais deste tema';
+  const action = groundedExplanation?.summary
+    || stripLead(raw?.summary)
+    || 'Executar as ações descritas nos trechos oficiais selecionados para este tema.';
   const rawEffect = stripLead(raw?.potentialImpact)
     .replace(/^(?:se implementadas[, ]*)?(?:essas|as) medidas podem\s+/iu, '');
-  const themeEffects = {
-    educacao: 'alterar a disciplina escolar, o financiamento e a oferta educacional',
-    'emprego-economia': 'estimular atividade econômica, investimento e geração de trabalho',
-    'tecnologia-inovacao': 'ampliar a capacidade tecnológica e produtiva do país',
-    'gestao-transparencia': 'mudar a organização do Estado e o controle da gestão pública',
-    saude: 'ampliar o acesso e a capacidade de atendimento em saúde',
-    'mobilidade-infraestrutura': 'melhorar deslocamentos, logística e infraestrutura disponível',
-    'protecao-social': 'alterar a proteção e o atendimento de grupos vulneráveis',
-    'cultura-esporte-turismo': 'ampliar acesso, atividade econômica e participação nessas áreas',
-    'seguranca-publica': 'reforçar prevenção, investigação e resposta ao crime organizado',
-  };
-  const fallbackEffect = themeEffects[theme.id] || 'produzir mudanças neste tema ao longo do mandato';
-  const effect = !rawEffect || similarity(action, rawEffect) >= 0.72 ? fallbackEffect : rawEffect;
+  const rawLimits = stripLead(raw?.conditionsAndLimits);
+  const fallbackEffect = 'A medida pode alterar a forma como a política pública deste tema chega à população, mas o resultado depende da execução.';
+  const vagueEffect = /\b(?:maior eficiencia|promover eficiencia|promover desenvolvimento|gerar beneficios|melhorar a sociedade)\b/iu.test(normalizedEvidenceText(rawEffect));
+  const effect = groundedExplanation?.potentialImpact
+    || (!rawEffect || vagueEffect || similarity(action, rawEffect) >= 0.72 ? fallbackEffect : rawEffect);
   const evidenceText = evidences.map((evidence) => evidence.quote).join(' ');
   const groundedAction = similarity(action, evidenceText) >= 0.1
     ? action
     : completeGeneratedSentence(evidences[0].quote, 190);
-  const summaryText = completeGeneratedSentence(
-    `O plano de governo de ${publicName} apresenta esta direção: ${groundedAction}`,
-    390,
-  );
-  const impactText = completeGeneratedSentence(
-    `Se implementadas, essas medidas têm este impacto possível: ${effect}`,
-    260,
+  const summaryText = completeGeneratedSentence(groundedAction, 520);
+  const impactText = completeGeneratedSentence(effect, 560);
+  const limitsText = completeGeneratedSentence(
+    groundedExplanation?.conditionsAndLimits
+      || rawLimits
+      || 'Os trechos selecionados não detalham todas as etapas de execução, os recursos necessários nem como os resultados seriam medidos.',
+    420,
   );
   return {
     summary: safeGeneratedText(
       summaryText,
       evidences,
       'Os trechos oficiais deste tema foram preservados abaixo, mas a síntese da IA não pôde ser validada com segurança.',
-      420,
+      540,
     ),
     potentialImpact: safeGeneratedText(
       impactText,
       evidences,
       'Os possíveis efeitos dependem da execução, dos recursos disponíveis e de decisões que o documento pode não detalhar.',
-      240,
+      560,
+    ),
+    conditionsAndLimits: safeGeneratedText(
+      limitsText,
+      evidences,
+      'Os trechos selecionados não detalham todas as etapas de execução, os recursos necessários nem como os resultados seriam medidos.',
+      420,
     ),
     evidences,
     pages: [...new Set(evidences.map((evidence) => evidence.page))].sort((left, right) => left - right),
-    grounding: 'THREE_THEME_EXCERPTS_VALIDATED_AGAINST_PDF_TEXT',
+    grounding: 'THEME_EXPLANATION_FROM_UP_TO_THREE_EXCERPTS_VALIDATED_AGAINST_PDF_TEXT',
   };
 }
 
@@ -533,9 +554,9 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
     })),
     candidateObjective,
     overview: explainedThemeCount
-      ? `A IA resumiu os três trechos mais representativos em ${explainedThemeCount} de ${themes.length} temas. As páginas oficiais usadas continuam disponíveis para conferência.`
+      ? `A IA explicou os trechos mais representativos em ${explainedThemeCount} de ${themes.length} temas: a mudança proposta, o caminho possível até a sociedade e o que ainda não foi detalhado. As páginas oficiais usadas continuam disponíveis para conferência.`
       : fallbackSummary.overview,
-    notice: 'A IA local resume até três trechos selecionados em cada tema e apresenta um impacto possível para quatro anos. As páginas e os trechos oficiais permanecem visíveis. O impacto é uma hipótese condicionada à execução, aos recursos e à regulamentação; não é previsão, garantia nem avaliação de viabilidade.',
+    notice: 'A IA local explica o que mudaria, como a medida pode chegar à sociedade e quais limites aparecem nos trechos selecionados. As páginas e os textos oficiais permanecem visíveis. O impacto é uma hipótese causal condicionada à execução, aos recursos e à regulamentação; não é previsão, garantia nem avaliação de viabilidade.',
     generatedAt,
     aiAnalysis: {
       status: 'READY',
@@ -552,8 +573,8 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
     methodology: {
       ...fallbackSummary.methodology,
       pageReadingRule: 'A leitura determinística percorre o PDF e seleciona até três trechos representativos por tema. A IA processa um tema por vez e recebe somente os trechos daquele assunto, sempre com o número da página.',
-      consolidationRule: 'A IA produz uma síntese por tema a partir de até três trechos selecionados pelo extrator. Os três trechos continuam visíveis e ligados às respectivas páginas do PDF.',
-      impactRule: 'O cenário de quatro anos é condicional e qualitativo. Não representa previsão, promessa de resultado, avaliação de viabilidade ou recomendação eleitoral.',
+      consolidationRule: 'A IA produz três blocos por tema a partir de até três trechos: mudança proposta, caminho possível até a sociedade e condições ou limites. Os trechos continuam visíveis e ligados às respectivas páginas do PDF.',
+      impactRule: 'A explicação mostra uma cadeia causal possível e qualitativa. Não representa previsão, promessa de resultado, avaliação de viabilidade ou recomendação eleitoral.',
       displayRule: 'A interface apresenta três propostas por vez, sem limitar a leitura das demais propostas consolidadas.',
     },
   };
