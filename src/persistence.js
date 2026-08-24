@@ -139,6 +139,16 @@ class SnapshotStore {
       );
       CREATE INDEX IF NOT EXISTS government_plan_analyses_status_idx
         ON government_plan_analyses (status, updated_at);
+
+      CREATE TABLE IF NOT EXISTS legislative_profile_cache (
+        chamber TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (chamber, member_id)
+      );
+      CREATE INDEX IF NOT EXISTS legislative_profile_cache_fetched_idx
+        ON legislative_profile_cache (fetched_at DESC);
     `);
   }
 
@@ -401,6 +411,30 @@ class SnapshotStore {
         Number(record.attempts) || 0,
         record.createdAt || null,
       ],
+    );
+  }
+
+  async getLegislativeProfileCache(chamber, memberId, maxAgeMs) {
+    if (!this.pool) return null;
+    const result = await this.pool.query(
+      `SELECT payload, fetched_at AS "fetchedAt"
+       FROM legislative_profile_cache
+       WHERE chamber = $1 AND member_id = $2
+         AND fetched_at >= NOW() - ($3::double precision * INTERVAL '1 millisecond')`,
+      [String(chamber), String(memberId), Math.max(0, Number(maxAgeMs) || 0)],
+    );
+    return result.rows[0] || null;
+  }
+
+  async saveLegislativeProfileCache(chamber, memberId, payload) {
+    if (!this.pool) return;
+    await this.pool.query(
+      `INSERT INTO legislative_profile_cache (chamber, member_id, payload, fetched_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (chamber, member_id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         fetched_at = NOW()`,
+      [String(chamber), String(memberId), payload],
     );
   }
 

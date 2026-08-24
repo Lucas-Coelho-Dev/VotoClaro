@@ -515,6 +515,7 @@ async function openCandidate(id) {
     state.candidateCache.set(id, payload.data);
     renderCandidateDetail(payload.data, payload.snapshot);
     loadIntegrity(id);
+    if (payload.data.legislative) loadLegislative(id);
     registerCandidateView(id);
   } catch {
     elements.candidateDetail.innerHTML = '<div class="detail-body"><div class="not-published">Não foi possível carregar este registro oficial agora.</div></div>';
@@ -587,8 +588,11 @@ function renderCandidateDetail(candidate, snapshot) {
     .join(' · ');
   const planEligible = ['GOVERNADOR', 'PRESIDENTE'].includes(String(candidate.office || '').toUpperCase());
   const governmentPlan = planEligible
-    ? `<section class="detail-section"><h3>Propostas para o mandato</h3><div id="governmentPlanData"><div class="not-published"><strong>Documento entregue ao TSE.</strong><br>O vínculo usa o identificador oficial desta candidatura.<br><button class="secondary-button" type="button" data-load-government-plan="${escapeHtml(candidate.id)}">Ver resumo e plano oficial</button></div></div></section>`
-    : `<section class="detail-section"><h3>Propostas para o mandato</h3><div class="not-published">O conjunto “Propostas de governo” do TSE é publicado para candidaturas a presidente e governador. Para os demais cargos, não atribuímos documentos por aproximação.</div></section>`;
+    ? `<section class="detail-section"><h3>Plano de governo</h3><div id="governmentPlanData"><div class="not-published"><strong>Documento entregue ao TSE.</strong><br>O vínculo usa o identificador oficial desta candidatura.<br><button class="secondary-button" type="button" data-load-government-plan="${escapeHtml(candidate.id)}">Ver resumo e plano oficial</button></div></div></section>`
+    : `<section class="detail-section"><h3>Plano de governo</h3><div class="not-published"><strong>Este cargo não entrega plano de governo individual nesse conjunto do TSE.</strong><br>Planos de governo são publicados para presidente e governador. Para cargos legislativos, o histórico verificável de normas aparece abaixo quando há vínculo oficial exato.</div></section>`;
+  const legislativeHistory = candidate.legislative
+    ? '<section class="detail-section"><h3>Leis e normas com autoria confirmada</h3><div id="legislativeData"><div class="mini-loading">Confirmando autoria e normas nas fontes legislativas oficiais…</div></div></section>'
+    : '<section class="detail-section"><h3>Leis e normas com autoria confirmada</h3><div class="not-published">Não há correspondência exata com um mandato parlamentar em exercício nas listas atuais da Câmara ou do Senado. Por segurança, nenhuma norma é atribuída apenas por semelhança de nome.</div></section>';
   const ticketEligible = ['PRESIDENTE', 'GOVERNADOR', 'SENADOR'].includes(String(candidate.office || '').toUpperCase());
   const runningMates = Array.isArray(candidate.runningMates) ? candidate.runningMates : [];
   const ticket = ticketEligible
@@ -614,6 +618,7 @@ function renderCandidateDetail(candidate, snapshot) {
       <section class="detail-section"><h3>Bens declarados</h3>${assets}</section>
       <section class="detail-section"><h3>Financiamento da campanha</h3>${finance}</section>
       ${governmentPlan}
+      ${legislativeHistory}
       <section class="detail-section"><h3>Fiscalização, dinheiro público e integridade</h3><div id="integrityData"><div class="mini-loading">Consultando TCU, TSE e fontes oficiais de transparência…</div></div></section>
       <section class="detail-section"><h3>Redes sociais declaradas</h3>${social}</section>
       <section class="detail-section"><h3>Proveniência</h3><div class="source-list">${sources}</div><p class="muted">Checksum da importação: ${escapeHtml(snapshot.checksum)}</p></section>
@@ -699,6 +704,18 @@ function renderIntegrityMoney(data) {
   return `<section class="integrity-group"><div class="integrity-group-heading"><div><span>VALORES PUBLICADOS</span><h4>Dinheiro e patrimônio declarados</h4></div><small>${legislativeFact ? 'TSE e Casa legislativa' : 'TSE'}</small></div><div class="fact-grid integrity-money-grid">${campaignFacts}${assetFacts}${legislativeFact}</div><p class="integrity-source-note">${escapeHtml(campaign.message || '')} ${escapeHtml(assets.message || '')}${legislativeFact ? ` ${escapeHtml(legislative.message || '')}` : ''}</p></section>`;
 }
 
+async function loadLegislative(id) {
+  const container = byId('legislativeData');
+  if (!container) return;
+  container.innerHTML = '<div class="mini-loading">Confirmando autoria e normas nas fontes legislativas oficiais…</div>';
+  try {
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative`);
+    container.innerHTML = renderLegislativeContent(payload.data, false);
+  } catch {
+    container.innerHTML = '<div class="not-published">A Câmara ou o Senado não respondeu agora. Nenhuma lei foi atribuída sem confirmação.</div>';
+  }
+}
+
 function renderIntegrityData(data, compact = false) {
   if (!data || data.status === 'UNAVAILABLE') {
     const retry = compact ? '' : '<button class="secondary-button integrity-retry-button" type="button" data-integrity-retry>Tentar novamente</button>';
@@ -713,17 +730,22 @@ function proposalCard(proposal) {
     ? `<div class="proposal-themes">${proposal.themes.map((theme) => `<span>${escapeHtml(theme)}</span>`).join('')}</div>`
     : '';
   const evidence = proposal.evidence || {
-    stage: 'PROPOSAL',
-    label: 'Efeito não confirmado',
-    explanation: 'A fonte consultada não publicou evidência suficiente para afirmar efeito real.',
+    stage: 'ENACTED',
+    label: 'Efeito jurídico confirmado',
+    explanation: 'A fonte oficial registra uma norma gerada.',
+    impactStatus: 'NOT_MEASURED',
+    impactLabel: 'Impacto social ainda não medido nesta consulta',
+    impactExplanation: 'Não foi localizada avaliação pública oficial vinculada.',
   };
   return `<article class="proposal-card">
-    <div class="proposal-heading"><strong>${escapeHtml(proposal.title || `${proposal.type} ${proposal.number}/${proposal.year}`)}</strong>${proposal.date ? `<time>${formatDate(proposal.date, false)}</time>` : ''}</div>
+    <div class="proposal-heading"><strong>${escapeHtml(proposal.lawTitle || proposal.title || `${proposal.type} ${proposal.number}/${proposal.year}`)}</strong>${proposal.date ? `<time>proposta apresentada em ${formatDate(proposal.date, false)}</time>` : ''}</div>
+    <div class="proposal-themes"><span>${escapeHtml(proposal.authorship?.label || 'Autoria oficial confirmada')}</span></div>
     ${themes}
-    <div class="proposal-block"><span>O que propõe — ementa oficial</span><p>${escapeHtml(proposal.summary || 'Ementa não publicada.')}</p></div>
-    <div class="proposal-block"><span>Situação oficial</span><p>${escapeHtml(proposal.status || 'Não publicada nesta consulta.')}</p></div>
+    <div class="proposal-block"><span>O que mudou juridicamente — ementa oficial</span><p>${escapeHtml(proposal.summary || 'Ementa não publicada.')}</p></div>
+    <div class="proposal-block"><span>Confirmação da fonte legislativa</span><p>${escapeHtml(proposal.status || 'Norma gerada confirmada na consulta oficial.')}</p></div>
     <div class="effect-evidence effect-${escapeHtml(String(evidence.stage || '').toLowerCase())}"><strong>${escapeHtml(evidence.label)}</strong><p>${escapeHtml(evidence.explanation)}</p></div>
-    <a class="inline-link" href="${escapeHtml(proposal.officialUrl)}" target="_blank" rel="noopener noreferrer">Acompanhar na fonte oficial ↗</a>
+    <div class="effect-evidence effect-impact"><strong>${escapeHtml(evidence.impactLabel || 'Impacto na sociedade')}</strong><p>${escapeHtml(evidence.impactExplanation || 'Nenhuma medição pública oficial foi vinculada nesta consulta.')}</p></div>
+    <a class="inline-link" href="${escapeHtml(proposal.officialUrl)}" target="_blank" rel="noopener noreferrer">Conferir autoria e tramitação ↗</a>${proposal.normOfficialUrl ? ` · <a class="inline-link" href="${escapeHtml(proposal.normOfficialUrl)}" target="_blank" rel="noopener noreferrer">Abrir norma oficial ↗</a>` : ''}
   </article>`;
 }
 
@@ -736,10 +758,10 @@ function renderLegislativeContent(data, includeExpenses = false) {
   const facts = includeExpenses
     ? `<div class="fact-grid">${expenses}<div class="fact"><span>Casa legislativa</span><strong>${escapeHtml(data.chamber)}</strong></div></div>`
     : '';
-  const proposals = data.proposals?.length
-    ? `<div class="proposal-list">${data.proposals.slice(0, 5).map(proposalCard).join('')}</div>`
-    : '<div class="not-published">Nenhum projeto dos tipos incluídos no recorte foi retornado. Isso não significa ausência de outras atividades parlamentares.</div>';
-  return `<div class="detail-section">${facts}${data.note ? `<p class="muted">${escapeHtml(data.note)}</p>` : ''}<h3>Até 5 projetos legislativos mais recentes</h3><p class="method-note">${escapeHtml(data.methodology?.rule || 'Recorte de proposições publicado pela Casa legislativa.')} ${escapeHtml(data.methodology?.impactRule || '')}</p>${proposals}<p class="muted">Consultado em ${formatDate(data.source.fetchedAt)} · <a href="${escapeHtml(data.source.url)}" target="_blank" rel="noopener noreferrer">fonte oficial</a></p></div>`;
+  const laws = data.laws?.length
+    ? `<div class="proposal-list">${data.laws.slice(0, 3).map(proposalCard).join('')}</div>`
+    : '<div class="not-published"><strong>Nenhuma norma passou por todas as confirmações deste recorte.</strong><br>Isso não prova que a pessoa nunca participou de outra lei: a consulta cobre as autorias retornadas para o mandato vinculado e exige que a própria Casa identifique a norma gerada.</div>';
+  return `<div class="legislative-results">${facts}${data.note ? `<p class="muted">${escapeHtml(data.note)}</p>` : ''}<p class="method-note">${escapeHtml(data.methodology?.rule || 'Recorte de normas e autorias publicado pela Casa legislativa.')} ${escapeHtml(data.methodology?.impactRule || '')}</p>${laws}<p class="muted">Consultado em ${formatDate(data.source.fetchedAt)} · <a href="${escapeHtml(data.source.url)}" target="_blank" rel="noopener noreferrer">fonte oficial</a></p></div>`;
 }
 
 async function loadGovernmentPlan(id) {
@@ -992,7 +1014,7 @@ function comparisonEvidenceColumn(candidate, evidence) {
   }
 
   const integrity = renderIntegrityData(evidence.integrity, true);
-  return `<section class="evidence-column"><h3>${escapeHtml(candidate.ballotName)}</h3><div class="evidence-section"><h4>Propostas para o mandato</h4>${plan}</div><div class="evidence-section"><h4>Projetos no mandato atual</h4>${legislative}</div><div class="evidence-section"><h4>Fiscalização e integridade</h4>${integrity}</div></section>`;
+  return `<section class="evidence-column"><h3>${escapeHtml(candidate.ballotName)}</h3><div class="evidence-section"><h4>Plano de governo</h4>${plan}</div><div class="evidence-section"><h4>Leis e normas com autoria confirmada</h4>${legislative}</div><div class="evidence-section"><h4>Fiscalização e integridade</h4>${integrity}</div></section>`;
 }
 
 async function renderComparisonEvidence(candidates, comparisonKey) {

@@ -219,6 +219,9 @@ a { color: var(--blue); }
 .effect-evidence { margin-top: 12px; padding: 10px; border-radius: 9px; background: var(--blue-soft); }
 .effect-evidence strong { color: var(--navy); font-size: 11px; }
 .effect-evidence p { margin: 2px 0 0; color: #486581; font-size: 10px; }
+.effect-impact { border: 1px solid #f1c979; background: #fff8e8; }
+.effect-impact strong { color: #7a4b00; }
+.effect-impact p { color: #6f5424; }
 .effect-enacted { background: var(--green-soft); }
 .effect-not_enacted { background: #f2f4f7; }
 .plan-card { padding: 15px; border: 1px solid #b9d8c9; border-radius: 11px; background: var(--green-soft); }
