@@ -1,6 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
-const { createLocalLlmSummary } = require('./plan-llm-analysis');
+const { createLocalLlmSummary, completeGeneratedSentence } = require('./plan-llm-analysis');
 const {
   LOCAL_LLM_ANALYSIS_VERSION,
   LOCAL_LLM_PROMPT_VERSION,
@@ -546,15 +546,56 @@ class GovernmentPlanSummaryService {
     await fs.rename(temporary, target);
   }
 
+  publicAnalysisPayload(payload) {
+    if (!payload?.candidateObjective?.summary) return payload;
+    return {
+      ...payload,
+      candidateObjective: {
+        ...payload.candidateObjective,
+        summary: completeGeneratedSentence(payload.candidateObjective.summary, 520),
+      },
+    };
+  }
+
+  async withAnalysisState(sha256, summary, storedAnalysis = undefined) {
+    if (!summary) return null;
+    if (!this.localLlmClient?.isEnabled()) {
+      return { ...summary, aiAnalysis: { status: 'DISABLED', local: true } };
+    }
+    const stored = storedAnalysis === undefined
+      ? await this.store?.getGovernmentPlanAnalysis?.(sha256, LOCAL_LLM_ANALYSIS_VERSION)
+      : storedAnalysis;
+    if (stored?.status === 'READY' && stored.payload?.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) {
+      return this.publicAnalysisPayload(stored.payload);
+    }
+    if (summary.aiAnalysis?.status === 'READY'
+      && summary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return this.publicAnalysisPayload(summary);
+    const progress = stored?.payload?.aiAnalysis || {};
+    return {
+      ...summary,
+      aiAnalysis: {
+        status: stored?.status || 'QUEUED',
+        local: true,
+        model: stored?.model || this.config.localLlmModel,
+        analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+        promptVersion: stored?.promptVersion || LOCAL_LLM_PROMPT_VERSION,
+        stage: progress.stage || (stored?.status === 'PROCESSING' ? 'PREPARING' : 'WAITING'),
+        completed: Number(progress.completed) || 0,
+        total: Number(progress.total) || 1,
+        attempts: Number(stored?.attempts) || 0,
+        updatedAt: stored?.updatedAt || null,
+      },
+    };
+  }
+
   async readReadyAnalysis(sha256) {
     const stored = await this.store?.getGovernmentPlanAnalysis?.(sha256, LOCAL_LLM_ANALYSIS_VERSION);
     if (stored?.status === 'READY' && stored.payload?.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) {
-      return stored.payload;
+      return this.publicAnalysisPayload(stored.payload);
     }
     const cached = await this.readCache(sha256);
     if (cached?.version !== SUMMARY_VERSION) return null;
-    if (!this.localLlmClient?.isEnabled() || cached.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return cached;
-    return cached;
+    return this.withAnalysisState(sha256, cached, stored);
   }
 
   async analysisAttempts(sha256) {
@@ -564,7 +605,8 @@ class GovernmentPlanSummaryService {
 
   queueLocalAnalysis(candidate, sha256, fallbackSummary) {
     if (!this.localLlmClient?.isEnabled() || this.queuedLlmDocuments.has(sha256)) return;
-    if (fallbackSummary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return;
+    if (fallbackSummary.aiAnalysis?.status === 'READY'
+      && fallbackSummary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return;
     this.queuedLlmDocuments.add(sha256);
     this.llmQueue.push({ candidate, sha256, fallbackSummary });
     setImmediate(() => this.runLlmQueue());
@@ -598,25 +640,46 @@ class GovernmentPlanSummaryService {
     await this.localLlmClient.waitUntilReady();
     const attempts = await this.analysisAttempts(job.sha256);
     if (attempts >= 3) return;
-    await this.store?.saveGovernmentPlanAnalysis?.({
+    const saveProgress = async ({ stage, completed = 0, total = 1 }) => this.store?.saveGovernmentPlanAnalysis?.({
       documentSha256: job.sha256,
       analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
       status: 'PROCESSING',
       model: this.config.localLlmModel,
       promptVersion: LOCAL_LLM_PROMPT_VERSION,
+      payload: {
+        aiAnalysis: {
+          status: 'PROCESSING',
+          local: true,
+          model: this.config.localLlmModel,
+          analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+          promptVersion: LOCAL_LLM_PROMPT_VERSION,
+          stage,
+          completed,
+          total,
+        },
+      },
       attempts: attempts + 1,
     });
+    await saveProgress({ stage: 'PREPARING' });
     try {
       const plan = await this.governmentPlanService.get(job.candidate);
       if (!plan || plan.sha256 !== job.sha256) throw new Error('O documento oficial mudou antes da análise local.');
       const extracted = await extractPdfPages(plan.buffer);
+      const analysisFallback = {
+        ...summarizeExtractedPages(extracted.pages, { pages: extracted.totalPages }),
+        documentSha256: plan.sha256,
+        generatedAt: new Date().toISOString(),
+        source: plan.source,
+      };
+      await saveProgress({ stage: 'SELECTING_EVIDENCE' });
       const enhanced = {
         ...await createLocalLlmSummary({
           pages: extracted.pages,
-          fallbackSummary: job.fallbackSummary,
+          fallbackSummary: analysisFallback,
           client: this.localLlmClient,
           themes: THEMES,
           config: this.config,
+          onProgress: saveProgress,
         }),
         documentSha256: plan.sha256,
         source: plan.source,
@@ -682,8 +745,9 @@ class GovernmentPlanSummaryService {
     if (!plan) return null;
     if (this.memory.has(plan.sha256)) {
       const remembered = this.memory.get(plan.sha256);
-      this.queueLocalAnalysis(candidate, plan.sha256, remembered);
-      return remembered;
+      const current = await this.withAnalysisState(plan.sha256, remembered);
+      this.queueLocalAnalysis(candidate, plan.sha256, current);
+      return current;
     }
     if (this.pending.has(plan.sha256)) return this.pending.get(plan.sha256);
 
@@ -703,8 +767,11 @@ class GovernmentPlanSummaryService {
           status: 'QUEUED',
           local: true,
           model: this.config.localLlmModel,
-          analysisVersion: null,
+          analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
           promptVersion: LOCAL_LLM_PROMPT_VERSION,
+          stage: 'WAITING',
+          completed: 0,
+          total: 1,
         } : {
           status: 'DISABLED',
           local: true,

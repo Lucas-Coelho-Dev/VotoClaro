@@ -19,7 +19,7 @@ services:
       - --parallel
       - "1"
       - --threads
-      - "2"
+      - "4"
     expose:
       - "8080"
     volumes:
@@ -31,7 +31,7 @@ services:
       retries: 60
       start_period: 30s
     mem_limit: 6g
-    cpus: 1.5
+    cpus: 4
 
   db:
     image: postgres:16-alpine

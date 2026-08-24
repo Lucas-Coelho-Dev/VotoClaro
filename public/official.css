@@ -236,6 +236,13 @@ a { color: var(--blue); }
 .analysis-progress { display: grid; gap: 3px; margin: 12px 18px 0; padding: 11px 12px; border: 1px solid #c9ddf2; border-radius: 9px; color: #184e77; background: #edf6ff; }
 .analysis-progress strong { font-size: 11px; }
 .analysis-progress span { font-size: 10px; line-height: 1.45; }
+.analysis-progress.is-failed { border-color: #ead3a0; color: #76510a; background: #fff8e8; }
+.plan-objective { margin: 14px 18px 0; padding: 15px; border: 1px solid #a9d3bd; border-radius: 11px; background: linear-gradient(135deg, #effaf4, #fff); }
+.plan-objective > span { color: #17613d; font-size: 8px; font-weight: 850; letter-spacing: .075em; }
+.plan-objective h5 { margin: 4px 0 6px; color: var(--navy); font-size: 16px; line-height: 1.25; }
+.plan-objective p { margin: 0; color: #294b3a; font-size: 12px; line-height: 1.55; }
+.plan-objective div { margin-top: 10px; color: #526d82; font-size: 9px; }
+.plan-objective a { color: var(--blue); font-weight: 800; text-decoration: none; }
 .plan-areas { display: flex; flex-wrap: wrap; gap: 5px; padding: 12px 18px 14px; }
 .plan-areas span { padding: 4px 8px; border-radius: 99px; color: #215a43; background: var(--green-soft); font-size: 9px; font-weight: 750; }
 .plan-theme-list { margin-top: 14px; border-top: 1px solid var(--line); }
@@ -526,6 +533,7 @@ a { color: var(--blue); }
   .plan-theme summary { grid-template-columns: 82px minmax(0, 1fr) 20px; padding: 12px; }
   .theme-content { padding: 0 12px 14px; }
   .analysis-progress { margin-right: 12px; margin-left: 12px; }
+  .plan-objective { margin-right: 12px; margin-left: 12px; padding: 13px; }
   .theme-proposal.is-ai-consolidated { padding: 12px; }
   .four-year-impact ol { grid-template-columns: 1fr; }
   .proposal-context-grid { grid-template-columns: 1fr; }

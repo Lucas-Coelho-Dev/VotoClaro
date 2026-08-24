@@ -1,85 +1,94 @@
 const { z } = require('zod');
 
-const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v1';
-const LOCAL_LLM_PROMPT_VERSION = 'government-plan-grounded-v1';
+const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v7';
+const LOCAL_LLM_PROMPT_VERSION = 'government-plan-evidence-explainer-v7';
 
 const evidenceSchema = z.object({
   page: z.coerce.number().int().min(1).max(10000),
-  quote: z.string().trim().min(20).max(700),
+  quote: z.string().trim().min(20).max(420),
+});
+
+const objectiveSchema = z.object({
+  summary: z.string().trim().min(30).max(360),
+  evidences: z.array(evidenceSchema).min(1).max(2),
 });
 
 const proposalSchema = z.object({
   theme: z.string().trim().min(1).max(80),
-  title: z.string().trim().min(4).max(140),
-  summary: z.string().trim().min(20).max(700),
-  evidences: z.array(evidenceSchema).min(1).max(6),
-  audience: z.array(z.string().trim().min(2).max(120)).max(6).default([]),
-  requirements: z.array(z.string().trim().min(2).max(180)).max(6).default([]),
-  risks: z.array(z.string().trim().min(2).max(180)).max(6).default([]),
-  indicators: z.array(z.string().trim().min(2).max(160)).max(6).default([]),
-  missingInformation: z.array(z.string().trim().min(2).max(160)).max(6).default([]),
-  fourYearScenario: z.object({
-    firstYear: z.string().trim().max(420).default(''),
-    yearsTwoAndThree: z.string().trim().max(420).default(''),
-    fourthYear: z.string().trim().max(420).default(''),
-    potentialImpact: z.string().trim().max(520).default(''),
-  }).default({}),
+  title: z.string().trim().min(4).max(100),
+  summary: z.string().trim().min(20).max(320),
+  evidences: z.array(evidenceSchema).min(1).max(1),
+  audience: z.array(z.string().trim().min(2).max(100)).max(2).default([]),
+  requirements: z.array(z.string().trim().min(2).max(140)).max(2).default([]),
+  missingInformation: z.array(z.string().trim().min(2).max(120)).max(2).default([]),
+  potentialImpact: z.string().trim().max(280).default(''),
 });
 
 const llmResponseSchema = z.object({
-  proposals: z.array(proposalSchema).max(18).default([]),
+  objective: objectiveSchema,
+  proposals: z.array(proposalSchema).max(3).default([]),
 });
 
 function responseJsonSchema(themeIds) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['proposals'],
+    required: ['objective', 'proposals'],
     properties: {
+      objective: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['summary', 'evidences'],
+        properties: {
+          summary: { type: 'string', minLength: 30, maxLength: 360 },
+          evidences: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 2,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['page', 'quote'],
+              properties: {
+                page: { type: 'integer', minimum: 1, maximum: 10000 },
+                quote: { type: 'string', minLength: 20, maxLength: 420 },
+              },
+            },
+          },
+        },
+      },
       proposals: {
         type: 'array',
-        maxItems: 18,
+        maxItems: 3,
         items: {
           type: 'object',
           additionalProperties: false,
           required: [
             'theme', 'title', 'summary', 'evidences', 'audience', 'requirements',
-            'risks', 'indicators', 'missingInformation', 'fourYearScenario',
+            'missingInformation', 'potentialImpact',
           ],
           properties: {
             theme: { type: 'string', enum: themeIds },
-            title: { type: 'string', minLength: 4, maxLength: 140 },
-            summary: { type: 'string', minLength: 20, maxLength: 700 },
+            title: { type: 'string', minLength: 4, maxLength: 100 },
+            summary: { type: 'string', minLength: 20, maxLength: 320 },
             evidences: {
               type: 'array',
               minItems: 1,
-              maxItems: 6,
+              maxItems: 1,
               items: {
                 type: 'object',
                 additionalProperties: false,
                 required: ['page', 'quote'],
                 properties: {
                   page: { type: 'integer', minimum: 1, maximum: 10000 },
-                  quote: { type: 'string', minLength: 20, maxLength: 700 },
+                  quote: { type: 'string', minLength: 20, maxLength: 420 },
                 },
               },
             },
-            audience: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 120 } },
-            requirements: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 180 } },
-            risks: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 180 } },
-            indicators: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 160 } },
-            missingInformation: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 160 } },
-            fourYearScenario: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['firstYear', 'yearsTwoAndThree', 'fourthYear', 'potentialImpact'],
-              properties: {
-                firstYear: { type: 'string', maxLength: 420 },
-                yearsTwoAndThree: { type: 'string', maxLength: 420 },
-                fourthYear: { type: 'string', maxLength: 420 },
-                potentialImpact: { type: 'string', maxLength: 520 },
-              },
-            },
+            audience: { type: 'array', maxItems: 2, items: { type: 'string', maxLength: 100 } },
+            requirements: { type: 'array', maxItems: 2, items: { type: 'string', maxLength: 140 } },
+            missingInformation: { type: 'array', maxItems: 2, items: { type: 'string', maxLength: 120 } },
+            potentialImpact: { type: 'string', maxLength: 280 },
           },
         },
       },
@@ -128,6 +137,32 @@ function localEndpoint(baseUrl) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function streamedMessageContent(response) {
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error('A LLM local não abriu o fluxo de resposta.');
+  const decoder = new TextDecoder();
+  let pending = '';
+  let content = '';
+  const consumeLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    const event = JSON.parse(data);
+    content += event?.choices?.[0]?.delta?.content || event?.choices?.[0]?.message?.content || '';
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() || '';
+    for (const line of lines) consumeLine(line);
+    if (done) break;
+  }
+  if (pending) consumeLine(pending);
+  return content;
 }
 
 class LocalLlmClient {
@@ -203,17 +238,23 @@ class LocalLlmClient {
     const themeList = this.themes.map((theme) => `${theme.id}: ${theme.label}`).join('\n');
     const system = [
       '/no_think',
-      'Você é um extrator neutro de propostas em planos de governo oficiais brasileiros.',
+      'Você é um explicador neutro de planos de governo oficiais brasileiros.',
       'Use exclusivamente o texto fornecido. Não use conhecimento externo e não avalie o candidato.',
-      'Identifique somente compromissos, ações, programas ou metas; diagnósticos isolados não são propostas.',
+      'Não trate o candidato como eleito nem como governo em exercício; escreva sempre que o plano pretende ou propõe.',
+      'Explique primeiro o objetivo central que conecta as prioridades recorrentes do plano.',
+      'Depois selecione as três propostas mais representativas do plano, no máximo uma por tema, apenas quando houver compromisso, ação, programa ou meta.',
+      'Diagnósticos, críticas e intenções genéricas isoladas não são propostas.',
       'Cada proposta precisa conter ao menos uma citação literal, com a página exatamente marcada no texto.',
+      'O objetivo central também precisa de citações literais que sustentem a síntese.',
       'Não invente números, custos, prazos, beneficiários ou resultados.',
-      'O cenário de quatro anos é condicional: descreva etapas e efeitos possíveis, nunca garantias.',
+      'Escreva para uma pessoa comum: frases curtas, concretas e sem jargão.',
+      'O impacto em quatro anos é condicional: descreva um efeito possível, nunca uma garantia.',
       'Quando o documento não informar custo, meta, prazo ou fonte de recursos, registre isso em missingInformation.',
-      'Não use algarismos no cenário condicional que não estejam nas evidências.',
+      'Não use algarismos no impacto condicional que não estejam nas evidências.',
+      'Seja conciso para cobrir mais temas com menos texto.',
       'Responda apenas no JSON solicitado.',
     ].join(' ');
-    const user = `TEMAS PERMITIDOS:\n${themeList}\n\nTEXTO OFICIAL COM MARCADORES DE PÁGINA:\n${chunk.text}`;
+    const user = `TEMAS PERMITIDOS:\n${themeList}\n\nEVIDÊNCIAS SELECIONADAS DO PDF OFICIAL, COM MARCADORES DE PÁGINA:\n${chunk.text}`;
     const endpoint = localEndpoint(this.config.localLlmBaseUrl);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.localLlmTimeoutMs);
@@ -236,12 +277,13 @@ class LocalLlmClient {
           presence_penalty: 1,
           seed: 2026,
           max_tokens: this.config.localLlmMaxOutputTokens,
+          stream: true,
           chat_template_kwargs: { enable_thinking: false },
           reasoning_effort: 'none',
           response_format: {
             type: 'json_schema',
             json_schema: {
-              name: 'government_plan_proposals',
+              name: 'government_plan_explanation',
               strict: true,
               schema: responseJsonSchema(this.themes.map((theme) => theme.id)),
             },
@@ -252,8 +294,11 @@ class LocalLlmClient {
         const message = String(await response.text()).slice(0, 500);
         throw new Error(`LLM local respondeu HTTP ${response.status}: ${message}`);
       }
-      const payload = await response.json();
-      const parsed = llmResponseSchema.parse(parseJsonContent(payload?.choices?.[0]?.message?.content));
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const content = contentType.includes('text/event-stream')
+        ? await streamedMessageContent(response)
+        : (await response.json())?.choices?.[0]?.message?.content;
+      const parsed = llmResponseSchema.parse(parseJsonContent(content));
       this.lastSuccessAt = new Date().toISOString();
       this.lastError = null;
       return parsed;

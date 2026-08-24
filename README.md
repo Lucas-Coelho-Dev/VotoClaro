@@ -19,7 +19,7 @@ Portal de transparência eleitoral que importa publicações oficiais, preserva 
 - A localização é opcional, identifica a UF no navegador com a malha oficial do IBGE e não envia nem armazena latitude ou longitude.
 - Planos de governo do TSE e até cinco projetos legislativos oficiais podem ser comparados sem notas ou recomendações automáticas.
 - A área de fiscalização consulta TCU e, com credencial oficial, CEIS/CNEP/CEAF por identificador exato; exibe o estágio publicado e nunca cria nota, ranking ou presunção de culpa.
-- PDFs de plano de governo recebem leitura automática em nove temas fixos — incluindo segurança pública e combate ao crime organizado. Quando a IA local está habilitada, todas as páginas com texto extraível são processadas, propostas semelhantes são consolidadas e exibidas em grupos de três com evidências e um cenário condicional de quatro anos.
+- PDFs de plano de governo recebem leitura automática em nove temas fixos — incluindo segurança pública e combate ao crime organizado. A leitura determinística percorre o documento, seleciona trechos representativos e a IA local explica o objetivo central e até três prioridades, sempre com página e citação validadas. Os demais trechos continuam visíveis sem reescrita.
 - A página inicial mostra até seis candidaturas mais consultadas por contagem agregada, sem tratar popularidade como apoio ou recomendação; a faixa some ao iniciar uma busca.
 - CPF do visitante, endereço e preferência eleitoral não são armazenados no servidor. O CPF público da candidatura é usado somente em memória para consultas oficiais exatas e nunca entra no snapshot, banco público, logs ou navegador.
 
@@ -54,9 +54,9 @@ Sem `DATABASE_URL`, somente dados públicos são armazenados em `data/latest.jso
 
 ### IA local para planos de governo
 
-A IA é opcional no desenvolvimento e habilitada pelo `compose.free.yml` na hospedagem recomendada. O modelo Qwen3 4B quantizado é executado pelo `llama.cpp` dentro da própria VM; nenhum texto do PDF é enviado para uma API externa e não há cobrança por chamada. O processamento ocorre em fila, uma análise por vez, e o resultado fica no PostgreSQL e no cache persistente pelo checksum do documento.
+A IA é opcional no desenvolvimento e habilitada pelo `compose.free.yml` na hospedagem recomendada. O modelo Qwen3 4B quantizado é executado pelo `llama.cpp` dentro da própria VM; nenhum texto do PDF é enviado para uma API externa e não há cobrança por chamada. O processamento ocorre em fila, uma análise por vez, com resposta transmitida continuamente para evitar quedas em gerações longas. O resultado fica no PostgreSQL e no cache persistente pelo checksum do documento.
 
-O sistema extrativo continua sendo o fallback. Cenários de quatro anos são qualitativos, condicionais e separados do conteúdo oficial. Citações precisam existir na página indicada, e números gerados que não constem nas evidências são descartados.
+O sistema extrativo continua sendo o fallback imediato. A IA recebe somente um conjunto curto de evidências selecionadas nos nove temas, produz um objetivo central e explica até três prioridades em linguagem simples. Possíveis impactos em quatro anos são qualitativos, condicionais e separados do conteúdo oficial. Citações precisam existir na página indicada, a classificação temática precisa coincidir com a leitura documental e números gerados que não constem nas evidências são descartados. A interface acompanha o processamento e atualiza o resultado automaticamente.
 
 ## Rotas públicas
 
@@ -115,7 +115,7 @@ src/
   government-plans.js planos do TSE associados por SQ_CANDIDATO
   plan-summary.js      extração do PDF e classificação neutra em nove temas fixos
   local-llm.js         cliente privado do servidor llama.cpp e resposta estruturada
-  plan-llm-analysis.js validação, consolidação e cenários condicionais por tema
+  plan-llm-analysis.js seleção de evidências, validação temática e impactos condicionais
   legislative.js      projetos oficiais e evidência de situação legal
   integrity.js         consultas oficiais exatas, cache, estágios e remoção de identificadores
   official-sync.js    importação dos pacotes oficiais

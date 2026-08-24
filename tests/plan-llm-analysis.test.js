@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   chunksFromPages,
+  chunksFromEvidenceSummary,
   createLocalLlmSummary,
   normalizedEvidenceText,
   validatedEvidences,
@@ -29,6 +30,64 @@ test('aceita somente citação que existe na página indicada', () => {
   ], pages);
   assert.equal(evidences.length, 1);
   assert.equal(evidences[0].page, 4);
+});
+
+test('envia à LLM somente evidências temáticas selecionadas, com página preservada', () => {
+  const fallbackSummary = summarizeExtractedPages([{
+    page: 6,
+    text: 'A proposta pretende ampliar escolas em tempo integral e formar professores da rede pública.',
+  }], { pages: 6 });
+  fallbackSummary.themeSummaries.find((theme) => theme.id === 'educacao').proposals.unshift({
+    page: 99,
+    text: 'Explicação antiga produzida por outra execução da IA.',
+    extraction: 'LOCAL_LLM_GROUNDED',
+  });
+  const chunks = chunksFromEvidenceSummary(fallbackSummary, 18000);
+  assert.equal(chunks.length, 1);
+  assert.equal(chunks[0].evidenceCount, 1);
+  assert.match(chunks[0].text, /PÁGINA 6 \| TEMA SUGERIDO: educacao/);
+  assert.doesNotMatch(chunks[0].text, /Explicação antiga/);
+  assert.doesNotMatch(chunks[0].text, /TEXTO INTEGRAL/i);
+});
+
+test('não publica explicação da IA em tema diferente daquele sustentado pelo trecho', async () => {
+  const pages = [{
+    page: 7,
+    text: 'A proposta pretende ampliar escolas em tempo integral e formar professores da rede pública.',
+  }];
+  const fallbackSummary = summarizeExtractedPages(pages, { pages: 7 });
+  const client = {
+    async analyzeChunk() {
+      return {
+        objective: {
+          summary: 'O plano pretende ampliar o atendimento educacional. Também busca atender populaçõe',
+          evidences: [{ page: 7, quote: 'A proposta pretende ampliar escolas em tempo integral e formar professores da rede pública.' }],
+        },
+        proposals: [{
+          theme: 'gestao-transparencia',
+          title: 'Gestão das escolas públicas',
+          summary: 'A proposta amplia escolas e fortalece a formação de professores da rede pública.',
+          evidences: [{ page: 7, quote: 'A proposta pretende ampliar escolas em tempo integral e formar professores da rede pública.' }],
+          audience: ['estudantes'],
+          requirements: ['formação docente'],
+          missingInformation: ['custo'],
+          potentialImpact: 'Pode ampliar o atendimento educacional se houver execução.',
+        }],
+      };
+    },
+  };
+  const summary = await createLocalLlmSummary({
+    pages,
+    fallbackSummary,
+    client,
+    themes: THEMES,
+    config: { localLlmChunkCharacters: 18000, localLlmModel: 'qwen3-4b-local' },
+  });
+  const management = summary.themeSummaries.find((theme) => theme.id === 'gestao-transparencia');
+  const education = summary.themeSummaries.find((theme) => theme.id === 'educacao');
+  assert.equal(management.proposals.some((proposal) => proposal.extraction === 'LOCAL_LLM_GROUNDED'), false);
+  assert.equal(education.proposalCount, 1);
+  assert.equal(summary.candidateObjective.summary, 'O plano pretende ampliar o atendimento educacional.');
 });
 
 test('consolida propostas por tema, valida evidências e mantém impacto condicional', async () => {
@@ -84,7 +143,16 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
           },
         });
       }
-      return { proposals };
+      return {
+        objective: {
+          summary: 'O plano busca ampliar serviços públicos de educação e saúde com atendimento regional.',
+          evidences: [{
+            page: 4,
+            quote: 'Vamos ampliar escolas em tempo integral e formar professores da rede pública em todas as regiões.',
+          }],
+        },
+        proposals,
+      };
     },
   };
   const summary = await createLocalLlmSummary({
@@ -99,6 +167,8 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
   });
   assert.equal(summary.summaryType, 'AUTOMATIC_THEMATIC_LOCAL_LLM');
   assert.equal(summary.aiAnalysis.status, 'READY');
+  assert.match(summary.candidateObjective.summary, /serviços públicos de educação e saúde/i);
+  assert.equal(summary.candidateObjective.evidences[0].page, 4);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').proposalCount, 1);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'saude').proposalCount, 1);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').proposals[0].evidences[0].page, 4);
@@ -113,7 +183,10 @@ test('remove número inventado do cenário que não aparece na evidência', asyn
   const fallbackSummary = summarizeExtractedPages(pages, { pages: 2 });
   const client = {
     async analyzeChunk() {
-      return { proposals: [{
+      return { objective: {
+        summary: 'O plano busca fortalecer a educação pública por meio da ampliação de escolas e formação docente.',
+        evidences: [{ page: 2, quote: 'A proposta pretende ampliar escolas e formar professores para fortalecer a educação pública.' }],
+      }, proposals: [{
         theme: 'educacao',
         title: 'Fortalecimento da educação pública',
         summary: 'Ampliação das escolas e formação de professores.',

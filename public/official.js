@@ -759,11 +759,33 @@ async function loadGovernmentPlanSummary(id, container) {
   const host = container.querySelector('[data-plan-summary-host]');
   if (!host) return;
   try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v1`);
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v7`);
     host.innerHTML = renderPlanSummary(payload.data);
+    clearTimeout(container.planSummaryPollTimer);
+    const retrying = payload.data?.aiAnalysis?.status === 'FAILED'
+      && Number(payload.data?.aiAnalysis?.attempts || 0) < 3;
+    if (['QUEUED', 'PROCESSING'].includes(payload.data?.aiAnalysis?.status) || retrying) {
+      container.planSummaryPollTimer = setTimeout(() => {
+        if (container.isConnected) loadGovernmentPlanSummary(id, container);
+      }, 8000);
+    }
   } catch {
     host.innerHTML = '<div class="not-published">O PDF oficial está disponível, mas o resumo automático não pôde ser produzido agora.</div>';
   }
+}
+
+function renderPlanObjective(objective, pdfUrl) {
+  if (!objective?.summary || !objective.evidences?.length) return '';
+  const summary = (() => {
+    const text = String(objective.summary).trim();
+    if (!text || /[.!?…]$/u.test(text)) return text;
+    const boundary = Math.max(text.lastIndexOf('.'), text.lastIndexOf('!'), text.lastIndexOf('?'));
+    return boundary >= Math.floor(text.length * 0.35) ? text.slice(0, boundary + 1).trim() : text;
+  })();
+  const pageLinks = objective.evidences.map((evidence) => (
+    `<a href="${escapeHtml(pdfUrl)}#page=${Number(evidence.page) || 1}" target="_blank" rel="noopener noreferrer">p. ${Number(evidence.page) || 1}</a>`
+  )).join(' · ');
+  return `<article class="plan-objective"><span>OBJETIVO CENTRAL · LEITURA DA IA</span><h5>O que este plano pretende mudar?</h5><p>${escapeHtml(summary)}</p><div><strong>Baseado em trechos validados:</strong> ${pageLinks}</div></article>`;
 }
 
 function renderPlanSummary(summary) {
@@ -780,14 +802,27 @@ function renderPlanSummary(summary) {
   const foundCount = summary.themeSummaries.filter((theme) => theme.status === 'FOUND').length;
   const totalThemes = summary.themeSummaries.length;
   const localAiReady = summary.summaryType === 'AUTOMATIC_THEMATIC_LOCAL_LLM' && summary.aiAnalysis?.status === 'READY';
-  const analysisBadge = localAiReady ? 'IA LOCAL · PDF PROCESSADO' : `LEITURA POR ${totalThemes} TEMAS`;
-  const pending = summary.aiAnalysis?.status === 'QUEUED'
-    ? '<div class="analysis-progress"><strong>Análise aprofundada em processamento</strong><span>Os trechos oficiais já estão disponíveis. A consolidação pela IA local será salva e aparecerá automaticamente em uma próxima consulta.</span></div>'
-    : '';
+  const analysisBadge = localAiReady ? 'IA LOCAL · EVIDÊNCIAS DO PDF' : `LEITURA POR ${totalThemes} TEMAS`;
+  const retrying = summary.aiAnalysis?.status === 'FAILED'
+    && Number(summary.aiAnalysis?.attempts || 0) < 3;
+  const analysisPending = ['QUEUED', 'PROCESSING'].includes(summary.aiAnalysis?.status) || retrying;
+  const stageLabel = retrying
+    ? 'Refazendo a explicação com segurança'
+    : summary.aiAnalysis?.status === 'QUEUED'
+    ? 'Aguardando a IA local'
+    : summary.aiAnalysis?.stage === 'SELECTING_EVIDENCE'
+      ? 'Selecionando evidências do PDF'
+      : 'Explicando objetivo e propostas';
+  const pending = analysisPending
+    ? `<div class="analysis-progress"><strong>${stageLabel}</strong><span>Os trechos oficiais já estão disponíveis. Esta tela verifica o resultado automaticamente; você não precisa fechar nem atualizar.</span></div>`
+    : summary.aiAnalysis?.status === 'FAILED'
+      ? '<div class="analysis-progress is-failed"><strong>A explicação da IA não ficou pronta</strong><span>Os trechos oficiais continuam disponíveis abaixo, sem alteração. Uma nova tentativa poderá ser feita automaticamente.</span></div>'
+      : '';
   const modelNote = localAiReady
-    ? ` · IA local ${escapeHtml(summary.aiAnalysis.model || '')} · ${Number(summary.aiAnalysis.chunksProcessed || 0)} blocos processados`
+    ? ` · IA local ${escapeHtml(summary.aiAnalysis.model || '')} · ${Number(summary.aiAnalysis.evidenceExcerpts || 0)} evidências selecionadas`
     : '';
-  return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">${analysisBadge}</span><h4>Propostas organizadas para comparação</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com propostas</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p>${pending}<div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas${modelNote} · gerado em ${formatDate(summary.generatedAt)}</span></div></section>`;
+  const objective = localAiReady ? renderPlanObjective(summary.candidateObjective, summary.pdfUrl) : '';
+  return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">${analysisBadge}</span><h4>Entenda o plano antes de escolher</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com propostas</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p>${pending}${objective}<div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas${modelNote} · gerado em ${formatDate(summary.generatedAt)}</span></div></section>`;
 }
 
 function renderPlanTheme(theme, pdfUrl, open = false) {
@@ -816,9 +851,17 @@ function renderPlanProposal(proposal, pdfUrl, index) {
   }
   const evidences = Array.isArray(proposal.evidences) ? proposal.evidences : [];
   const scenario = proposal.fourYearScenario || {};
+  const timelineItems = [
+    ['Primeiro ano', scenario.firstYear],
+    ['Anos 2 e 3', scenario.yearsTwoAndThree],
+    ['Quarto ano', scenario.fourthYear],
+  ].filter((item) => item[1]);
+  const timeline = timelineItems.length
+    ? `<ol>${timelineItems.map(([label, text]) => `<li><strong>${escapeHtml(label)}</strong><p>${escapeHtml(text)}</p></li>`).join('')}</ol>`
+    : '';
   const pages = [...new Set(evidences.map((evidence) => Number(evidence.page) || 1))];
   const evidenceContent = evidences.map((evidence) => `<blockquote><p>${escapeHtml(evidence.quote)}</p><a href="${escapeHtml(pdfUrl)}#page=${Number(evidence.page) || 1}" target="_blank" rel="noopener noreferrer">Conferir página ${Number(evidence.page) || 1} ↗</a></blockquote>`).join('');
-  return `<article class="theme-proposal is-ai-consolidated"${hidden}><div class="proposal-title-row"><span>${index + 1}</span><div><small>PROPOSTA CONSOLIDADA</small><h5>${escapeHtml(proposal.title || 'Proposta identificada')}</h5></div></div><p class="proposal-summary-text">${escapeHtml(proposal.summary || proposal.text)}</p><section class="four-year-impact"><span>POSSÍVEL IMPACTO EM 4 ANOS · CENÁRIO CONDICIONAL</span><p>${escapeHtml(scenario.potentialImpact || 'O resultado dependerá da execução e dos recursos disponíveis.')}</p><ol><li><strong>Primeiro ano</strong><p>${escapeHtml(scenario.firstYear || 'Etapa não detalhada no plano.')}</p></li><li><strong>Anos 2 e 3</strong><p>${escapeHtml(scenario.yearsTwoAndThree || 'Etapa não detalhada no plano.')}</p></li><li><strong>Quarto ano</strong><p>${escapeHtml(scenario.fourthYear || 'Resultado não quantificado no plano.')}</p></li></ol></section><div class="proposal-context-grid">${renderListBlock('Quem pode ser afetado', proposal.audience)}${renderListBlock('Dependências', proposal.requirements)}${renderListBlock('Riscos de execução', proposal.risks, 'is-risk')}${renderListBlock('Como acompanhar', proposal.indicators)}${renderListBlock('Não identificado nos trechos', proposal.missingInformation, 'is-missing')}</div><details class="proposal-evidence"><summary>Ver ${evidences.length} ${evidences.length === 1 ? 'evidência' : 'evidências'} no PDF · ${escapeHtml(pages.map((page) => `p. ${page}`).join(', '))}</summary>${evidenceContent}</details>${proposal.section ? `<div class="theme-location"><span><strong>Seção associada:</strong> ${escapeHtml(proposal.section)}</span></div>` : ''}</article>`;
+  return `<article class="theme-proposal is-ai-consolidated"${hidden}><div class="proposal-title-row"><span>${index + 1}</span><div><small>PRIORIDADE EXPLICADA PELA IA</small><h5>${escapeHtml(proposal.title || 'Proposta identificada')}</h5></div></div><p class="proposal-summary-text">${escapeHtml(proposal.summary || proposal.text)}</p><section class="four-year-impact"><span>POSSÍVEL IMPACTO EM 4 ANOS · CENÁRIO CONDICIONAL</span><p>${escapeHtml(scenario.potentialImpact || 'O resultado dependerá da execução e dos recursos disponíveis.')}</p>${timeline}</section><div class="proposal-context-grid">${renderListBlock('Quem pode ser afetado', proposal.audience)}${renderListBlock('O que precisa acontecer', proposal.requirements)}${renderListBlock('O plano não detalha', proposal.missingInformation, 'is-missing')}</div><details class="proposal-evidence"><summary>Ver ${evidences.length} ${evidences.length === 1 ? 'evidência' : 'evidências'} no PDF · ${escapeHtml(pages.map((page) => `p. ${page}`).join(', '))}</summary>${evidenceContent}</details>${proposal.section ? `<div class="theme-location"><span><strong>Seção associada:</strong> ${escapeHtml(proposal.section)}</span></div>` : ''}</article>`;
 }
 
 function showNextPlanProposals(button) {
@@ -913,7 +956,7 @@ async function candidateEvidence(candidate) {
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/status`)
       : Promise.resolve(null),
     planEligible
-      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v1`)
+      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v7`)
       : Promise.resolve(null),
     candidate.legislative
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative`)

@@ -5,6 +5,7 @@ const {
 } = require('./local-llm');
 
 const MAX_PUBLIC_PROPOSALS_PER_THEME = 30;
+const MAX_EVIDENCES_PER_THEME = 2;
 
 function cleanText(value, maximum = 700) {
   return String(value || '')
@@ -88,6 +89,49 @@ function chunksFromPages(pages, maximumCharacters, normalizeText) {
   return chunks;
 }
 
+function chunksFromEvidenceSummary(fallbackSummary, maximumCharacters) {
+  const chunks = [];
+  let parts = [];
+  let size = 0;
+  let pageNumbers = new Set();
+  let evidenceCount = 0;
+  const flush = () => {
+    if (!parts.length) return;
+    chunks.push({
+      text: parts.join('\n\n'),
+      pages: [...pageNumbers].sort((left, right) => left - right),
+      evidenceCount,
+    });
+    parts = [];
+    size = 0;
+    pageNumbers = new Set();
+    evidenceCount = 0;
+  };
+
+  for (const theme of fallbackSummary.themeSummaries || []) {
+    const extractiveProposals = (theme.proposals || [])
+      .filter((proposal) => proposal.extraction !== 'LOCAL_LLM_GROUNDED');
+    for (const proposal of extractiveProposals.slice(0, MAX_EVIDENCES_PER_THEME)) {
+      const page = Number(proposal.page);
+      const text = cleanText(proposal.text, 680);
+      if (!page || text.length < 20) continue;
+      const section = cleanText(proposal.section, 120);
+      const marked = [
+        `<<<PÁGINA ${page} | TEMA SUGERIDO: ${theme.id}>>>`,
+        section ? `Seção extraída: ${section}` : '',
+        text,
+      ].filter(Boolean).join('\n');
+      if (parts.length && size + marked.length > maximumCharacters) flush();
+      parts.push(marked);
+      size += marked.length;
+      evidenceCount += 1;
+      pageNumbers.add(page);
+    }
+  }
+  flush();
+  return chunks;
+}
+
 function numberTokens(value) {
   return new Set(String(value || '').match(/\b\d+(?:[.,]\d+)*(?:%|º|ª)?\b/g) || []);
 }
@@ -101,8 +145,19 @@ function hasUnsupportedNumber(value, evidences) {
   return false;
 }
 
-function safeGeneratedText(value, evidences, fallback, maximum) {
+function completeGeneratedSentence(value, maximum) {
   const cleaned = cleanText(value, maximum);
+  if (!cleaned || /[.!?…]$/u.test(cleaned)) return cleaned;
+  const lastBoundary = Math.max(cleaned.lastIndexOf('.'), cleaned.lastIndexOf('!'), cleaned.lastIndexOf('?'));
+  if (lastBoundary >= Math.floor(cleaned.length * 0.35)) return cleaned.slice(0, lastBoundary + 1).trim();
+  const withoutPartialWord = cleaned.replace(/\s+\S*$/u, '').trim();
+  return withoutPartialWord ? `${withoutPartialWord}.` : cleaned;
+}
+
+function safeGeneratedText(value, evidences, fallback, maximum, completeSentence = true) {
+  const cleaned = completeSentence
+    ? completeGeneratedSentence(value, maximum)
+    : cleanText(value, maximum);
   if (!cleaned || hasUnsupportedNumber(cleaned, evidences)) return fallback;
   return cleaned;
 }
@@ -196,10 +251,14 @@ function sectionForProposal(theme, proposal, fallbackSummary) {
 function sanitizeProposal(raw, theme, pagesByNumber, fallbackSummary) {
   const evidences = validatedEvidences(raw.evidences, pagesByNumber);
   if (!evidences.length) return null;
+  const fallbackTheme = fallbackSummary.themeSummaries?.find((item) => item.id === theme.id);
+  const groundedInTheme = evidences.some((evidence) => (fallbackTheme?.proposals || []).some((proposal) => (
+    Number(proposal.page) === evidence.page && similarity(proposal.text, evidence.quote) >= 0.32
+  )));
+  if (!groundedInTheme) return null;
   const evidenceFallback = cleanText(evidences[0].quote, 520);
-  const genericScenario = 'O plano não fornece elementos suficientes para detalhar esta etapa sem acrescentar suposições.';
   const summary = safeGeneratedText(raw.summary, evidences, evidenceFallback, 620);
-  const title = safeGeneratedText(raw.title, evidences, `Proposta sobre ${theme.label}`, 120);
+  const title = safeGeneratedText(raw.title, evidences, `Proposta sobre ${theme.label}`, 120, false);
   const proposal = {
     title,
     summary,
@@ -208,20 +267,20 @@ function sanitizeProposal(raw, theme, pagesByNumber, fallbackSummary) {
     pages: [...new Set(evidences.map((evidence) => evidence.page))].sort((a, b) => a - b),
     page: evidences[0].page,
     section: null,
-    audience: safeGeneratedStrings(raw.audience, evidences, 6, 120),
-    requirements: safeGeneratedStrings(raw.requirements, evidences),
-    risks: safeGeneratedStrings(raw.risks, evidences),
-    indicators: safeGeneratedStrings(raw.indicators, evidences, 6, 160),
-    missingInformation: safeGeneratedStrings(raw.missingInformation, evidences, 6, 160),
+    audience: safeGeneratedStrings(raw.audience, evidences, 2, 100),
+    requirements: safeGeneratedStrings(raw.requirements, evidences, 2, 140),
+    risks: [],
+    indicators: [],
+    missingInformation: safeGeneratedStrings(raw.missingInformation, evidences, 2, 120),
     fourYearScenario: {
-      firstYear: safeGeneratedText(raw.fourYearScenario?.firstYear, evidences, genericScenario, 380),
-      yearsTwoAndThree: safeGeneratedText(raw.fourYearScenario?.yearsTwoAndThree, evidences, genericScenario, 380),
-      fourthYear: safeGeneratedText(raw.fourYearScenario?.fourthYear, evidences, genericScenario, 380),
+      firstYear: '',
+      yearsTwoAndThree: '',
+      fourthYear: '',
       potentialImpact: safeGeneratedText(
-        raw.fourYearScenario?.potentialImpact,
+        raw.potentialImpact || raw.fourYearScenario?.potentialImpact,
         evidences,
         'O efeito ao final do mandato depende de execução, recursos e condições que o documento pode não detalhar.',
-        480,
+        280,
       ),
     },
     extraction: 'LOCAL_LLM_GROUNDED',
@@ -230,6 +289,23 @@ function sanitizeProposal(raw, theme, pagesByNumber, fallbackSummary) {
   proposal.section = sectionForProposal(theme, proposal, fallbackSummary);
   proposal.detailScore = detailScore(proposal);
   return proposal;
+}
+
+function sanitizeObjective(raw, pagesByNumber) {
+  const evidences = validatedEvidences(raw?.evidences, pagesByNumber);
+  if (!evidences.length) return null;
+  const summary = safeGeneratedText(
+    raw?.summary,
+    evidences,
+    'O objetivo central não pôde ser explicado sem acrescentar informações que não constam nos trechos validados.',
+    520,
+  );
+  return {
+    summary,
+    evidences,
+    pages: [...new Set(evidences.map((evidence) => evidence.page))].sort((left, right) => left - right),
+    grounding: 'QUOTES_VALIDATED_AGAINST_PDF_TEXT',
+  };
 }
 
 function consolidateByTheme(rawProposals, themes, pagesByNumber, fallbackSummary) {
@@ -268,17 +344,55 @@ function consolidateByTheme(rawProposals, themes, pagesByNumber, fallbackSummary
   });
 }
 
-async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, config }) {
-  const chunks = chunksFromPages(pages, config.localLlmChunkCharacters, (value) => cleanText(value, 60_000));
+function mergeFallbackThemes(explainedThemes, fallbackSummary) {
+  return explainedThemes.map((theme) => {
+    const fallbackTheme = fallbackSummary.themeSummaries?.find((item) => item.id === theme.id);
+    const proposals = [...theme.proposals];
+    for (const fallbackProposal of (fallbackTheme?.proposals || [])
+      .filter((proposal) => proposal.extraction !== 'LOCAL_LLM_GROUNDED')) {
+      const duplicate = proposals.some((proposal) => (
+        Number(proposal.page) === Number(fallbackProposal.page)
+        && similarity(`${proposal.title || ''} ${proposal.summary || proposal.text || ''}`, fallbackProposal.text) >= 0.28
+      ));
+      if (!duplicate) proposals.push(fallbackProposal);
+    }
+    const pages = [...new Set(proposals.flatMap((proposal) => (
+      proposal.pages?.length ? proposal.pages : [proposal.page]
+    )).map(Number).filter(Boolean))].sort((left, right) => left - right);
+    return {
+      ...theme,
+      status: proposals.length ? 'FOUND' : 'NOT_IDENTIFIED',
+      proposalCount: proposals.length,
+      mentionCount: proposals.reduce((total, proposal) => total + (proposal.evidences?.length || 1), 0),
+      pages,
+      sections: [...new Set(proposals.map((proposal) => proposal.section).filter(Boolean))],
+      proposals,
+    };
+  });
+}
+
+async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, config, onProgress }) {
+  const chunks = chunksFromEvidenceSummary(fallbackSummary, config.localLlmChunkCharacters);
   if (!chunks.length) throw new Error('O PDF não contém texto suficiente para a análise local.');
   const rawProposals = [];
-  for (const chunk of chunks) {
+  const rawObjectives = [];
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    await onProgress?.({ stage: 'EXPLAINING', completed: index, total: chunks.length });
     const result = await client.analyzeChunk(chunk);
     rawProposals.push(...result.proposals);
+    rawObjectives.push(result.objective);
+    await onProgress?.({ stage: 'EXPLAINING', completed: index + 1, total: chunks.length });
   }
   const pagesByNumber = new Map(pages.map((page) => [Number(page.page), normalizedEvidenceText(page.text)]));
-  const themeSummaries = consolidateByTheme(rawProposals, themes, pagesByNumber, fallbackSummary);
+  const explainedThemes = consolidateByTheme(rawProposals, themes, pagesByNumber, fallbackSummary);
+  const themeSummaries = mergeFallbackThemes(explainedThemes, fallbackSummary);
+  const explainedThemeCount = explainedThemes.filter((theme) => theme.status === 'FOUND').length;
   const foundThemes = themeSummaries.filter((theme) => theme.status === 'FOUND');
+  const candidateObjective = rawObjectives
+    .map((objective) => sanitizeObjective(objective, pagesByNumber))
+    .filter(Boolean)
+    .sort((left, right) => right.evidences.length - left.evidences.length)[0] || null;
   const generatedAt = new Date().toISOString();
   return {
     ...fallbackSummary,
@@ -293,10 +407,11 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
       title: theme.label,
       ...theme.proposals[0],
     })),
-    overview: foundThemes.length
-      ? `${foundThemes.length} de ${themes.length} temas possuem propostas consolidadas a partir do texto integral processado.`
+    candidateObjective,
+    overview: explainedThemeCount
+      ? `A IA explicou propostas representativas em ${explainedThemeCount} de ${themes.length} temas. Os demais trechos localizados no PDF continuam disponíveis sem reescrita.`
       : fallbackSummary.overview,
-    notice: 'A IA local organiza trechos do PDF oficial e apresenta cenários condicionais para quatro anos. Citações e páginas são conferidas no texto extraído; públicos afetados, dependências, efeitos, riscos e etapas são inferências, não previsões nem garantias. Números só podem ser reproduzidos quando constam nas evidências.',
+    notice: 'A IA local explica evidências selecionadas do PDF oficial e apresenta cenários condicionais para quatro anos. Toda síntese mantém citações e páginas conferidas no texto extraído. Públicos afetados, dependências, efeitos, riscos e etapas são inferências, não previsões nem garantias. Números só podem ser reproduzidos quando constam nas evidências.',
     generatedAt,
     aiAnalysis: {
       status: 'READY',
@@ -305,13 +420,15 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
       analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
       promptVersion: LOCAL_LLM_PROMPT_VERSION,
       chunksProcessed: chunks.length,
+      evidencePacksProcessed: chunks.length,
+      evidenceExcerpts: chunks.reduce((total, chunk) => total + chunk.evidenceCount, 0),
       textPagesProcessed: pagesByNumber.size,
       generatedAt,
     },
     methodology: {
       ...fallbackSummary.methodology,
-      pageReadingRule: 'Todas as páginas com texto extraível são processadas em blocos preservando o número da página.',
-      consolidationRule: 'Trechos semelhantes do mesmo tema são reunidos; cada proposta pública mantém ao menos uma citação validada no texto extraído.',
+      pageReadingRule: 'A leitura determinística percorre o PDF e seleciona trechos representativos por tema; a IA recebe somente esse conjunto curto de evidências, sempre com o número da página.',
+      consolidationRule: 'A IA explica até três propostas prioritárias, no máximo uma por tema. Trechos adicionais permanecem disponíveis sem reescrita, e cada explicação mantém ao menos uma citação validada no PDF.',
       impactRule: 'O cenário de quatro anos é condicional e qualitativo. Não representa previsão, promessa de resultado, avaliação de viabilidade ou recomendação eleitoral.',
       displayRule: 'A interface apresenta três propostas por vez, sem limitar a leitura das demais propostas consolidadas.',
     },
@@ -320,8 +437,10 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
 
 module.exports = {
   chunksFromPages,
+  chunksFromEvidenceSummary,
   createLocalLlmSummary,
   normalizedEvidenceText,
   validatedEvidences,
   consolidateByTheme,
+  completeGeneratedSentence,
 };
