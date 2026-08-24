@@ -7,6 +7,7 @@ const {
   authorshipFromSenate,
   generatedNorm,
   selectLatestLegislativeItems,
+  legislativeItemKey,
 } = require('../src/legislative');
 
 test('não transforma uma proposição em impacto real sem norma', () => {
@@ -49,4 +50,11 @@ test('seleciona projetos e exclui requerimentos procedimentais', () => {
     { Sigla: 'PEC', Data: '2026-08-17', Codigo: '4' },
   ]);
   assert.deepEqual(selected.map((item) => item.Sigla), ['PEC', 'PL']);
+});
+
+test('gera chave estável por parlamentar, norma e conteúdo oficial', () => {
+  const candidate = { legislative: { chamber: 'CAMARA', memberId: '99' } };
+  const item = { id: '10', title: 'PL 10/2026', lawTitle: 'Lei 20/2026', summary: 'Ementa oficial', status: 'Norma gerada' };
+  assert.equal(legislativeItemKey(candidate, item), legislativeItemKey(candidate, { ...item }));
+  assert.notEqual(legislativeItemKey(candidate, item), legislativeItemKey(candidate, { ...item, summary: 'Ementa atualizada' }));
 });

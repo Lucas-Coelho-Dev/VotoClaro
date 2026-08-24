@@ -524,6 +524,9 @@ class GovernmentPlanSummaryService {
     this.queuedLlmDocuments = new Set();
     this.llmWorkerRunning = false;
     this.precomputeRunning = false;
+    this.precomputeScannedCandidates = 0;
+    this.precomputeEligibleCandidates = 0;
+    this.precomputeCompletedAt = null;
   }
 
   cachePath(sha256) {
@@ -610,12 +613,21 @@ class GovernmentPlanSummaryService {
     return Number(stored?.attempts) || 0;
   }
 
-  queueLocalAnalysis(candidate, sha256, fallbackSummary) {
-    if (!this.localLlmClient?.isEnabled() || this.queuedLlmDocuments.has(sha256)) return;
+  queueLocalAnalysis(candidate, sha256, fallbackSummary, priority = 'interactive') {
+    if (!this.localLlmClient?.isEnabled()) return;
+    if (this.queuedLlmDocuments.has(sha256)) {
+      if (priority === 'interactive') {
+        const index = this.llmQueue.findIndex((job) => job.sha256 === sha256);
+        if (index > 0) this.llmQueue.unshift(...this.llmQueue.splice(index, 1));
+      }
+      return;
+    }
     if (fallbackSummary.aiAnalysis?.status === 'READY'
       && fallbackSummary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return;
     this.queuedLlmDocuments.add(sha256);
-    this.llmQueue.push({ candidate, sha256, fallbackSummary });
+    const job = { candidate, sha256, fallbackSummary };
+    if (priority === 'background') this.llmQueue.push(job);
+    else this.llmQueue.unshift(job);
     setImmediate(() => this.runLlmQueue());
   }
 
@@ -737,14 +749,19 @@ class GovernmentPlanSummaryService {
       const eligible = (Array.isArray(candidates) ? candidates : [])
         .filter((candidate) => ['PRESIDENTE', 'GOVERNADOR'].includes(String(candidate.office || '').toUpperCase()))
         .slice(0, this.config.localLlmPrecomputeLimit);
+      this.precomputeEligibleCandidates = eligible.length;
+      this.precomputeScannedCandidates = 0;
       for (const candidate of eligible) {
         try {
-          await this.get(candidate);
+          await this.get(candidate, { background: true });
         } catch (error) {
           console.error(`Plano não preparado para ${candidate.id}:`, error.message);
+        } finally {
+          this.precomputeScannedCandidates += 1;
         }
       }
       await this.runLlmQueue();
+      this.precomputeCompletedAt = new Date().toISOString();
     } finally {
       this.precomputeRunning = false;
     }
@@ -756,16 +773,20 @@ class GovernmentPlanSummaryService {
       queuedDocuments: this.llmQueue.length,
       workerRunning: this.llmWorkerRunning,
       precomputeRunning: this.precomputeRunning,
+      scannedCandidates: this.precomputeScannedCandidates,
+      eligibleCandidates: this.precomputeEligibleCandidates,
+      precomputeCompletedAt: this.precomputeCompletedAt,
     };
   }
 
-  async get(candidate) {
+  async get(candidate, options = {}) {
+    const priority = options.background ? 'background' : 'interactive';
     const plan = await this.governmentPlanService.get(candidate);
     if (!plan) return null;
     if (this.memory.has(plan.sha256)) {
       const remembered = this.memory.get(plan.sha256);
       const current = await this.withAnalysisState(plan.sha256, remembered);
-      this.queueLocalAnalysis(candidate, plan.sha256, current);
+      this.queueLocalAnalysis(candidate, plan.sha256, current, priority);
       return current;
     }
     if (this.pending.has(plan.sha256)) return this.pending.get(plan.sha256);
@@ -773,7 +794,7 @@ class GovernmentPlanSummaryService {
     const pending = (async () => {
       const cached = await this.readReadyAnalysis(plan.sha256);
       if (cached?.version === SUMMARY_VERSION) {
-        this.queueLocalAnalysis(candidate, plan.sha256, cached);
+        this.queueLocalAnalysis(candidate, plan.sha256, cached, priority);
         return cached;
       }
       const extracted = await extractPdfPages(plan.buffer);
@@ -797,7 +818,7 @@ class GovernmentPlanSummaryService {
         },
       };
       await this.saveCache(plan.sha256, summary).catch(() => {});
-      this.queueLocalAnalysis(candidate, plan.sha256, summary);
+      this.queueLocalAnalysis(candidate, plan.sha256, summary, priority);
       return summary;
     })();
     this.pending.set(plan.sha256, pending);

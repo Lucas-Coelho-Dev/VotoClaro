@@ -3,6 +3,7 @@ const {
   config,
   store,
   synchronizer,
+  legislativeService,
   governmentPlanSummaryService,
   initializeRuntime,
 } = require('./runtime');
@@ -16,6 +17,9 @@ function precomputeLatestGovernmentPlans() {
   setImmediate(() => {
     governmentPlanSummaryService.precomputeCandidates(snapshot.candidates).catch((error) => {
       console.error('Falha na preparação local dos planos de governo:', error.message);
+    });
+    legislativeService.precomputeCandidates(snapshot.candidates).catch((error) => {
+      console.error('Falha na preparação das explicações legislativas:', error.message);
     });
   });
 }

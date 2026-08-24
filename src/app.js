@@ -159,6 +159,7 @@ app.get('/api/v1/health', (request, response) => {
   const ageHours = importedAt ? (Date.now() - new Date(importedAt).getTime()) / 3_600_000 : null;
   const stale = ageHours === null || ageHours > 36;
   const planAnalysisStatus = governmentPlanSummaryService.getStatus();
+  const legislativeAnalysisStatus = legislativeService.getStatus();
   response.status(snapshot && !stale ? 200 : 503).json({
     status: !snapshot ? 'INITIALIZING' : stale ? 'STALE' : 'OK',
     dataReady: Boolean(snapshot),
@@ -179,9 +180,13 @@ app.get('/api/v1/health', (request, response) => {
       queuedDocuments: planAnalysisStatus.queuedDocuments,
       workerRunning: planAnalysisStatus.workerRunning,
       precomputeRunning: planAnalysisStatus.precomputeRunning,
+      scannedCandidates: planAnalysisStatus.scannedCandidates,
+      eligibleCandidates: planAnalysisStatus.eligibleCandidates,
+      precomputeCompletedAt: planAnalysisStatus.precomputeCompletedAt,
       lastSuccessAt: planAnalysisStatus.lastSuccessAt,
       lastErrorAt: planAnalysisStatus.lastErrorAt,
     },
+    localLegislativeAnalysis: legislativeAnalysisStatus,
   });
 });
 
@@ -475,7 +480,8 @@ app.get('/api/v1/candidates/:id/legislative', async (request, response, next) =>
     if (!candidate) return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND' });
     if (!candidate.legislative) return response.status(404).json({ error: 'NO_VERIFIED_LINK', message: 'Não existe correspondência exata com um mandato parlamentar atual.' });
     const data = await legislativeService.get(candidate);
-    response.setHeader('Cache-Control', 'public, max-age=900, stale-while-revalidate=3600');
+    const pendingExplanation = data?.laws?.some((law) => ['QUEUED', 'PROCESSING'].includes(law.plainLanguage?.status));
+    response.setHeader('Cache-Control', pendingExplanation ? 'no-store' : 'public, max-age=900, stale-while-revalidate=3600');
     return response.json({ data, match: candidate.legislative });
   } catch (error) {
     return next(error);

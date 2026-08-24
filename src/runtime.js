@@ -11,12 +11,12 @@ const { CandidateIdentityVault, IntegrityService } = require('./integrity');
 
 const store = new SnapshotStore(config);
 const photoSynchronizer = new CandidatePhotoSync(config, store);
-const legislativeService = new LegislativeService(config, store);
 const identityVault = new CandidateIdentityVault();
 const synchronizer = new OfficialDataSync(config, store, photoSynchronizer, identityVault);
 const geographyService = new GeographyService(config);
 const governmentPlanService = new GovernmentPlanService(config);
 const localLlmClient = new LocalLlmClient(config, THEMES);
+const legislativeService = new LegislativeService(config, store, localLlmClient);
 const governmentPlanSummaryService = new GovernmentPlanSummaryService(
   config,
   governmentPlanService,

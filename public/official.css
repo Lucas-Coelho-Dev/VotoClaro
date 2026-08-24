@@ -216,6 +216,18 @@ a { color: var(--blue); }
 .proposal-block { margin-top: 12px; }
 .proposal-block > span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .proposal-block p { margin: 3px 0 0; color: var(--ink); font-size: 12px; }
+.law-ai-explanation { margin-top: 12px; overflow: hidden; border: 1px solid #b8cce1; border-radius: 10px; background: #f7fbff; }
+.law-ai-heading { display: flex; justify-content: space-between; gap: 10px; padding: 9px 10px; color: var(--blue); background: #eaf4ff; font-size: 8px; font-weight: 850; letter-spacing: .045em; }
+.law-ai-heading small { color: var(--muted); font-size: 8px; font-weight: 650; letter-spacing: 0; text-align: right; }
+.law-ai-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); }
+.law-ai-grid article { min-width: 0; padding: 10px; background: #fff; }
+.law-ai-grid strong { color: var(--navy); font-size: 10px; }
+.law-ai-grid p { margin: 4px 0 0; color: #486581; font-size: 10px; line-height: 1.5; }
+.law-ai-grid .law-fine-print { background: #fffaf0; }
+.law-ai-pending { display: grid; gap: 3px; margin-top: 12px; padding: 10px; border: 1px solid #c9ddf2; border-radius: 9px; color: #184e77; background: #edf6ff; }
+.law-ai-pending strong { font-size: 10px; }
+.law-ai-pending span { font-size: 9px; line-height: 1.45; }
+.law-ai-pending.is-failed { border-color: #ead3a0; color: #76510a; background: #fff8e8; }
 .effect-evidence { margin-top: 12px; padding: 10px; border-radius: 9px; background: var(--blue-soft); }
 .effect-evidence strong { color: var(--navy); font-size: 11px; }
 .effect-evidence p { margin: 2px 0 0; color: #486581; font-size: 10px; }
@@ -538,6 +550,9 @@ a { color: var(--blue); }
   .compare-evidence-grid { grid-template-columns: 1fr; }
   .evidence-column { padding: 14px; }
   .proposal-heading { flex-direction: column; gap: 3px; }
+  .law-ai-heading { flex-direction: column; }
+  .law-ai-heading small { text-align: left; }
+  .law-ai-grid { grid-template-columns: 1fr; }
   .document-link { width: 100%; justify-content: center; }
   .plan-summary-heading { align-items: flex-start; flex-direction: column; }
   .plan-theme summary { grid-template-columns: 82px minmax(0, 1fr) 20px; padding: 12px; }

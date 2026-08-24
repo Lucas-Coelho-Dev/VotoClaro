@@ -149,6 +149,22 @@ class SnapshotStore {
       );
       CREATE INDEX IF NOT EXISTS legislative_profile_cache_fetched_idx
         ON legislative_profile_cache (fetched_at DESC);
+
+      CREATE TABLE IF NOT EXISTS legislative_item_analyses (
+        item_key TEXT NOT NULL,
+        analysis_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('PENDING', 'PROCESSING', 'READY', 'FAILED')),
+        model TEXT,
+        prompt_version TEXT,
+        payload JSONB,
+        error_message TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (item_key, analysis_version)
+      );
+      CREATE INDEX IF NOT EXISTS legislative_item_analyses_status_idx
+        ON legislative_item_analyses (status, updated_at);
     `);
   }
 
@@ -435,6 +451,48 @@ class SnapshotStore {
          payload = EXCLUDED.payload,
          fetched_at = NOW()`,
       [String(chamber), String(memberId), payload],
+    );
+  }
+
+  async getLegislativeItemAnalysis(itemKey, analysisVersion) {
+    if (!this.pool) return null;
+    const result = await this.pool.query(
+      `SELECT item_key AS "itemKey", analysis_version AS "analysisVersion",
+              status, model, prompt_version AS "promptVersion", payload,
+              error_message AS "error", attempts, created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM legislative_item_analyses
+       WHERE item_key = $1 AND analysis_version = $2`,
+      [String(itemKey), String(analysisVersion)],
+    );
+    return result.rows[0] || null;
+  }
+
+  async saveLegislativeItemAnalysis(record) {
+    if (!this.pool) return;
+    await this.pool.query(
+      `INSERT INTO legislative_item_analyses (
+         item_key, analysis_version, status, model, prompt_version,
+         payload, error_message, attempts, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()), NOW())
+       ON CONFLICT (item_key, analysis_version) DO UPDATE SET
+         status = EXCLUDED.status,
+         model = EXCLUDED.model,
+         prompt_version = EXCLUDED.prompt_version,
+         payload = EXCLUDED.payload,
+         error_message = EXCLUDED.error_message,
+         attempts = EXCLUDED.attempts,
+         updated_at = NOW()`,
+      [
+        record.itemKey,
+        record.analysisVersion,
+        record.status,
+        record.model || null,
+        record.promptVersion || null,
+        record.payload || null,
+        record.error || null,
+        Number(record.attempts) || 0,
+        record.createdAt || null,
+      ],
     );
   }
 

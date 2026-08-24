@@ -58,6 +58,9 @@ module.exports = Object.freeze({
   localLlmChunkCharacters: integerFromEnv('LOCAL_LLM_CHUNK_CHARACTERS', 18000, 2000),
   localLlmMaxOutputTokens: integerFromEnv('LOCAL_LLM_MAX_OUTPUT_TOKENS', 1100, 256),
   localLlmTemperature: numberFromEnv('LOCAL_LLM_TEMPERATURE', 0.1, 0, 0.4),
-  localLlmPrecomputeOnStart: booleanFromEnv('LOCAL_LLM_PRECOMPUTE_ON_START', true),
-  localLlmPrecomputeLimit: integerFromEnv('LOCAL_LLM_PRECOMPUTE_LIMIT', 200, 1),
+  // Chave nova: instalações locais antigas usavam LOCAL_LLM_PRECOMPUTE_ON_START=false
+  // para testes pontuais e acabavam desativando silenciosamente a varredura futura.
+  localLlmPrecomputeOnStart: booleanFromEnv('BACKGROUND_ANALYSIS_ENABLED', true),
+  localLlmPrecomputeLimit: integerFromEnv('LOCAL_LLM_PRECOMPUTE_LIMIT', 500, 1),
+  localLlmLegislativePrecomputeLimit: integerFromEnv('LOCAL_LLM_LEGISLATIVE_PRECOMPUTE_LIMIT', 500, 1),
 });

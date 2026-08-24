@@ -129,3 +129,53 @@ test('bloqueia envio do plano para um endereço público', () => {
   assert.equal(localEndpoint('http://llm:8080/v1').hostname, 'llm');
   assert.equal(localEndpoint('http://192.168.1.10:8080/v1').hostname, '192.168.1.10');
 });
+
+test('traduz a ementa legislativa em três blocos sem abandonar as ressalvas', async (context) => {
+  let received;
+  const server = http.createServer((request, response) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      received = JSON.parse(body);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        plainLanguage: 'A norma organiza o atendimento prioritário descrito na ementa oficial.',
+        possibleImpact: 'Pode facilitar o acesso do público alcançado, se houver execução adequada.',
+        finePrint: 'A ementa não informa como a implementação será fiscalizada nem mede resultados sociais.',
+      }) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  const client = new LocalLlmClient({
+    localLlmEnabled: true,
+    localLlmBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+    localLlmModel: 'qwen3-1.7b-local',
+    localLlmTimeoutMs: 5000,
+    localLlmMaxOutputTokens: 800,
+    localLlmTemperature: 0.1,
+  }, THEMES);
+  const result = await client.analyzeLegislativeItem({
+    title: 'PL 10/2026',
+    lawTitle: 'Lei 20/2026',
+    summary: 'Organiza o atendimento prioritário ao público alcançado.',
+    status: 'Transformado em norma jurídica',
+    authorship: { label: 'Coautoria / assinatura' },
+  }, { candidateName: 'CANDIDATO TESTE' });
+  assert.match(result.plainLanguage, /atendimento prioritário/i);
+  assert.match(result.possibleImpact, /pode/i);
+  assert.match(result.finePrint, /não encontrou avaliação pública/i);
+  assert.doesNotMatch(result.possibleImpact, /facilitar o acesso/i);
+  assert.equal(received.response_format.json_schema.name, 'legislative_plain_language');
+  assert.match(received.messages[0].content, /Coautoria não é autoria exclusiva/i);
+  const pending = await client.analyzeLegislativeItem({
+    title: 'PEC sem número',
+    summary: 'Propõe alterar regras administrativas.',
+    status: 'Aguardando análise',
+    evidence: { stage: 'PROPOSAL' },
+  }, { candidateName: 'CANDIDATO TESTE' });
+  assert.match(pending.possibleImpact, /Se for aprovado e implementado/i);
+  assert.match(pending.finePrint, /ainda não produz efeito legal direto/i);
+});

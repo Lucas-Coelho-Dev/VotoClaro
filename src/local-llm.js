@@ -2,6 +2,8 @@ const { z } = require('zod');
 
 const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v14';
 const LOCAL_LLM_PROMPT_VERSION = 'government-plan-theme-digest-v14';
+const LEGISLATIVE_LLM_ANALYSIS_VERSION = 'legislative-plain-language-v3';
+const LEGISLATIVE_LLM_PROMPT_VERSION = 'legislative-fine-print-v3';
 
 const objectiveSchema = z.object({
   summary: z.string().trim().min(30).max(180),
@@ -17,6 +19,23 @@ const llmResponseSchema = z.object({
   objective: objectiveSchema,
   themeDigests: z.record(z.string(), themeDigestSchema),
 });
+
+const legislativeExplanationSchema = z.object({
+  plainLanguage: z.string().trim().min(30).max(240),
+  possibleImpact: z.string().trim().min(20).max(180),
+  finePrint: z.string().trim().min(20).max(180),
+});
+
+const legislativeExplanationJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['plainLanguage', 'possibleImpact', 'finePrint'],
+  properties: {
+    plainLanguage: { type: 'string', minLength: 30, maxLength: 240 },
+    possibleImpact: { type: 'string', minLength: 20, maxLength: 180 },
+    finePrint: { type: 'string', minLength: 20, maxLength: 180 },
+  },
+};
 
 function responseJsonSchema(themeIds) {
   return {
@@ -99,6 +118,56 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function numericTokens(value) {
+  return new Set(String(value || '').match(/\d+(?:[.,]\d+)*/g) || []);
+}
+
+function assertNoUnsupportedNumbers(result, sourceText) {
+  const allowed = numericTokens(sourceText);
+  const generated = numericTokens(Object.values(result || {}).join(' '));
+  for (const number of generated) {
+    if (!allowed.has(number)) throw new Error(`A explicação legislativa criou o número não sustentado ${number}.`);
+  }
+}
+
+const LEGISLATIVE_GENERIC_TOKENS = new Set([
+  'pode', 'podem', 'pratica', 'efeito', 'efeitos', 'mudanca', 'mudancas', 'juridica', 'juridicas',
+  'aplicacao', 'execucao', 'resultado', 'resultados', 'social', 'sociais', 'depende', 'dependem',
+  'medido', 'medidos', 'medida', 'avaliacao', 'consulta', 'fonte', 'oficial', 'norma', 'lei',
+]);
+
+function contentTokens(value) {
+  const ignored = new Set(['para', 'como', 'isso', 'essa', 'esse', 'esta', 'este', 'uma', 'com', 'sem', 'que', 'dos', 'das', 'pela', 'pelo', 'aos', 'nas', 'nos', 'ser', 'ter', 'mais', 'forma']);
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .match(/[a-z]{4,}/g)?.filter((token) => !ignored.has(token)) || [];
+}
+
+function groundedLegislativeImpact(value, sourceText, item) {
+  const source = new Set(contentTokens(sourceText));
+  const unsupported = contentTokens(value).filter((token) => !source.has(token) && !LEGISLATIVE_GENERIC_TOKENS.has(token));
+  if (new Set(unsupported).size <= 2) return value;
+  if (item?.evidence?.stage === 'PROPOSAL') {
+    return 'Se for aprovado e implementado, pode produzir a mudança descrita na ementa; esta consulta não mede resultados sociais.';
+  }
+  return 'Pode produzir a mudança jurídica descrita na ementa; os efeitos sociais dependem da execução e ainda não foram medidos nesta consulta.';
+}
+
+function legislativeFinePrint(item) {
+  if (item?.evidence?.stage === 'PROPOSAL') {
+    return 'A fonte confirma somente uma proposta em tramitação. Ela ainda não produz efeito legal direto e pode ser alterada, aprovada ou arquivada.';
+  }
+  return 'A fonte confirma a mudança jurídica, mas esta consulta não encontrou avaliação pública vinculada que meça resultados sociais da norma.';
+}
+
+function preferredLegislativeSummary(value) {
+  const text = String(value || '').trim();
+  const updated = text.split(/NOVA EMENTA\s*:/iu).pop().trim();
+  return updated || text;
+}
+
 async function streamedMessageContent(response) {
   const reader = response.body?.getReader?.();
   if (!reader) throw new Error('A LLM local não abriu o fluxo de resposta.');
@@ -135,6 +204,7 @@ class LocalLlmClient {
     this.activeRequests = 0;
     this.waitingForServer = false;
     this.serverReadyAt = null;
+    this.executionTail = Promise.resolve();
   }
 
   isEnabled() {
@@ -194,6 +264,16 @@ class LocalLlmClient {
   }
 
   async analyzeChunk(chunk, context = {}) {
+    return this.runExclusive(() => this.performPlanAnalysis(chunk, context));
+  }
+
+  async runExclusive(operation) {
+    const scheduled = this.executionTail.then(operation, operation);
+    this.executionTail = scheduled.catch(() => {});
+    return scheduled;
+  }
+
+  async performPlanAnalysis(chunk, context = {}) {
     if (!this.isEnabled()) throw new Error('A LLM local está desabilitada.');
     const allowedThemeIds = Array.isArray(chunk.themeIds) && chunk.themeIds.length
       ? chunk.themeIds
@@ -291,12 +371,112 @@ class LocalLlmClient {
       this.activeRequests -= 1;
     }
   }
+
+  async analyzeLegislativeItem(item, context = {}) {
+    return this.runExclusive(() => this.performLegislativeAnalysis(item, context));
+  }
+
+  async performLegislativeAnalysis(item, context = {}) {
+    if (!this.isEnabled()) throw new Error('A LLM local está desabilitada.');
+    const candidateName = String(context.candidateName || 'a pessoa candidata')
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 100);
+    const sourceText = [
+      `CANDIDATURA: ${candidateName}`,
+      `AUTORIA: ${item.authorship?.label || 'Autoria confirmada pela fonte oficial'}`,
+      `PROPOSIÇÃO: ${item.title || ''}`,
+      `NORMA: ${item.lawTitle || ''}`,
+      `EMENTA OFICIAL: ${preferredLegislativeSummary(item.summary)}`,
+      `SITUAÇÃO OFICIAL: ${item.status || ''}`,
+      `TEMAS OFICIAIS: ${(item.themes || []).join(', ')}`,
+    ].join('\n');
+    const system = [
+      '/no_think',
+      'Você traduz a linguagem de leis brasileiras para leitores comuns, de modo neutro e verificável.',
+      'Use exclusivamente os campos oficiais fornecidos. Não use conhecimento externo e não elogie nem ataque a candidatura.',
+      'plainLanguage deve explicar em palavras simples o que a norma ou proposição faz, sem copiar a ementa inteira.',
+      'possibleImpact deve dizer o que ela pode mudar na prática, sempre como possibilidade, nunca como impacto comprovado.',
+      'No impacto, use somente substantivos e conceitos que já aparecem na ementa. Não suponha comemorações, benefícios, melhoria, equidade, transparência, economia ou comportamento.',
+      'finePrint deve apenas reconhecer que a fonte não mede os resultados sociais; não invente lacunas específicas.',
+      'Quando houver NOVA EMENTA, ela é o texto oficial atualizado, não uma ação de substituir um registro anterior.',
+      'Não atribua autoria individual além do rótulo oficial fornecido. Coautoria não é autoria exclusiva.',
+      'Não invente números, valores, prazos, beneficiários, resultados, controvérsias ou intenções.',
+      'Use frases curtas e concretas. Responda somente no JSON solicitado.',
+    ].join(' ');
+    const endpoint = localEndpoint(this.config.localLlmBaseUrl);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.localLlmTimeoutMs);
+    this.activeRequests += 1;
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          model: this.config.localLlmModel,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: sourceText },
+          ],
+          temperature: this.config.localLlmTemperature,
+          top_p: 0.8,
+          top_k: 20,
+          min_p: 0,
+          seed: 2026,
+          max_tokens: Math.min(this.config.localLlmMaxOutputTokens, 700),
+          stream: true,
+          chat_template_kwargs: { enable_thinking: false },
+          reasoning_effort: 'none',
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'legislative_plain_language',
+              strict: true,
+              schema: legislativeExplanationJsonSchema,
+            },
+          },
+        }),
+      });
+      if (!response.ok) {
+        const message = String(await response.text()).slice(0, 500);
+        throw new Error(`LLM local respondeu HTTP ${response.status}: ${message}`);
+      }
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const content = contentType.includes('text/event-stream')
+        ? await streamedMessageContent(response)
+        : (await response.json())?.choices?.[0]?.message?.content;
+      const parsed = legislativeExplanationSchema.parse(parseJsonContent(content));
+      assertNoUnsupportedNumbers(parsed, sourceText);
+      this.lastSuccessAt = new Date().toISOString();
+      this.lastError = null;
+      return {
+        ...parsed,
+        possibleImpact: groundedLegislativeImpact(parsed.possibleImpact, sourceText, item),
+        finePrint: legislativeFinePrint(item),
+      };
+    } catch (error) {
+      const normalized = error.name === 'AbortError'
+        ? new Error('Tempo limite ao consultar a LLM local.')
+        : error;
+      this.lastErrorAt = new Date().toISOString();
+      this.lastError = normalized.message;
+      throw normalized;
+    } finally {
+      clearTimeout(timeout);
+      this.activeRequests -= 1;
+    }
+  }
 }
 
 module.exports = {
   LocalLlmClient,
   LOCAL_LLM_ANALYSIS_VERSION,
   LOCAL_LLM_PROMPT_VERSION,
+  LEGISLATIVE_LLM_ANALYSIS_VERSION,
+  LEGISLATIVE_LLM_PROMPT_VERSION,
   llmResponseSchema,
+  legislativeExplanationSchema,
   localEndpoint,
 };

@@ -1,5 +1,10 @@
+const crypto = require('crypto');
 const { searchable } = require('./normalize');
 const { SOURCES } = require('./sources');
+const {
+  LEGISLATIVE_LLM_ANALYSIS_VERSION,
+  LEGISLATIVE_LLM_PROMPT_VERSION,
+} = require('./local-llm');
 
 async function fetchJson(url, config, accept = 'application/json') {
   const controller = new AbortController();
@@ -24,6 +29,7 @@ function exactKey(name, uf, party) {
 }
 
 const LEGISLATIVE_MATTER_TYPES = new Set(['PL', 'PLP', 'PEC', 'PDL', 'PLS', 'PLC', 'PRS', 'MPV']);
+const LEGISLATIVE_PROFILE_VERSION = 2;
 
 function asArray(value) {
   if (!value) return [];
@@ -78,6 +84,20 @@ function selectLatestLegislativeItems(items, limit = 5) {
       return Number(right.id || right.Codigo || 0) - Number(left.id || left.Codigo || 0);
     })
     .slice(0, limit);
+}
+
+function legislativeItemKey(candidate, item) {
+  const stableIdentity = [
+    candidate?.legislative?.chamber,
+    candidate?.legislative?.memberId,
+    item?.id,
+    item?.processId,
+    item?.title,
+    item?.lawTitle,
+    item?.summary,
+    item?.status,
+  ].map((value) => String(value || '').trim()).join('|');
+  return crypto.createHash('sha256').update(stableIdentity).digest('hex');
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -169,6 +189,7 @@ async function enrichDeputyProposal(inspected, config, memberId) {
   ));
   const lawReference = normReferenceFromText(`${status} ${officialStatus.despacho || ''}`)
     || normReferenceFromText(`${normMovement?.descricaoTramitacao || ''} ${normMovement?.descricaoSituacao || ''} ${normMovement?.despacho || ''}`);
+  const enacted = isEnactedStatus(officialStatus);
   return {
     id: item.id,
     type: item.siglaTipo,
@@ -178,13 +199,15 @@ async function enrichDeputyProposal(inspected, config, memberId) {
     summary: published.ementa || item.ementa || 'Ementa não publicada.',
     date: published.dataApresentacao || null,
     status,
-    lawTitle: lawReference || `${item.siglaTipo} ${item.numero}/${item.ano} — norma jurídica gerada`,
+    lawTitle: enacted
+      ? (lawReference || `${item.siglaTipo} ${item.numero}/${item.ano} — norma jurídica gerada`)
+      : `${item.siglaTipo} ${item.numero}/${item.ano} — projeto em tramitação`,
     themes: themeRows.map((theme) => theme.tema).filter(Boolean).slice(0, 4),
     primaryAuthor: published.autor || null,
     authorship: authorshipFromDeputyAuthors(authorRows, memberId),
     officialUrl: `https://www.camara.leg.br/proposicoesWeb/fichadetramitacao?idProposicao=${encodeURIComponent(item.id)}`,
     fullTextUrl: published.urlInteiroTeor || null,
-    normOfficialUrl: officialStatus.url || normMovement?.url || null,
+    normOfficialUrl: enacted ? (officialStatus.url || normMovement?.url || null) : null,
     evidence: effectEvidence(officialStatus),
   };
 }
@@ -323,13 +346,21 @@ async function enrichCandidatesWithLegislativeLinks(candidates, config) {
 }
 
 class LegislativeService {
-  constructor(config, store = null) {
+  constructor(config, store = null, localLlmClient = null) {
     this.config = config;
     this.store = store;
+    this.localLlmClient = localLlmClient;
     this.cache = new Map();
+    this.analysisQueue = [];
+    this.queuedAnalysisKeys = new Set();
+    this.analysisWorkerRunning = false;
+    this.precomputeRunning = false;
+    this.precomputeScannedCandidates = 0;
+    this.precomputeEligibleCandidates = 0;
+    this.precomputeCompletedAt = null;
   }
 
-  async get(candidate) {
+  async getRaw(candidate) {
     if (!candidate.legislative) return null;
     const key = `${candidate.legislative.chamber}:${candidate.legislative.memberId}`;
     const cached = this.cache.get(key);
@@ -339,7 +370,7 @@ class LegislativeService {
       candidate.legislative.memberId,
       6 * 60 * 60 * 1000,
     );
-    if (stored?.payload) {
+    if (stored?.payload?.profileVersion === LEGISLATIVE_PROFILE_VERSION) {
       this.cache.set(key, { savedAt: new Date(stored.fetchedAt).getTime(), data: stored.payload });
       return stored.payload;
     }
@@ -353,6 +384,158 @@ class LegislativeService {
       data,
     ).catch(() => {});
     return data;
+  }
+
+  queueExplanation(candidate, item, itemKey, priority = 'interactive') {
+    if (!this.localLlmClient?.isEnabled() || this.queuedAnalysisKeys.has(itemKey)) {
+      if (priority === 'interactive' && this.queuedAnalysisKeys.has(itemKey)) {
+        const index = this.analysisQueue.findIndex((job) => job.itemKey === itemKey);
+        if (index > 0) this.analysisQueue.unshift(...this.analysisQueue.splice(index, 1));
+      }
+      return;
+    }
+    this.queuedAnalysisKeys.add(itemKey);
+    const job = { candidate, item, itemKey };
+    if (priority === 'background') this.analysisQueue.push(job);
+    else this.analysisQueue.unshift(job);
+    setImmediate(() => this.runAnalysisQueue());
+  }
+
+  async attachExplanations(candidate, data, priority) {
+    if (!data?.laws?.length || !this.localLlmClient?.isEnabled()) return data;
+    const laws = [];
+    for (const item of data.laws) {
+      const itemKey = legislativeItemKey(candidate, item);
+      const stored = await this.store?.getLegislativeItemAnalysis?.(
+        itemKey,
+        LEGISLATIVE_LLM_ANALYSIS_VERSION,
+      );
+      if (stored?.status === 'READY' && stored.payload) {
+        laws.push({ ...item, plainLanguage: stored.payload });
+        continue;
+      }
+      const attempts = Number(stored?.attempts) || 0;
+      const status = attempts >= 3 ? 'FAILED' : (stored?.status || 'QUEUED');
+      laws.push({
+        ...item,
+        plainLanguage: {
+          status,
+          local: true,
+          attempts,
+          analysisVersion: LEGISLATIVE_LLM_ANALYSIS_VERSION,
+          updatedAt: stored?.updatedAt || null,
+        },
+      });
+      if (attempts < 3) this.queueExplanation(candidate, item, itemKey, priority);
+    }
+    return { ...data, laws };
+  }
+
+  async get(candidate, options = {}) {
+    const data = await this.getRaw(candidate);
+    return this.attachExplanations(candidate, data, options.background ? 'background' : 'interactive');
+  }
+
+  async runAnalysisQueue() {
+    if (this.analysisWorkerRunning || !this.localLlmClient?.isEnabled()) return;
+    this.analysisWorkerRunning = true;
+    try {
+      while (this.analysisQueue.length) {
+        const job = this.analysisQueue.shift();
+        try {
+          await this.processExplanation(job);
+        } catch (error) {
+          console.error(`Falha na explicação legislativa ${job.itemKey.slice(0, 12)}:`, error.message);
+          if (error.code === 'LOCAL_LLM_NOT_READY') {
+            this.analysisQueue.length = 0;
+            this.queuedAnalysisKeys.clear();
+            break;
+          }
+        } finally {
+          this.queuedAnalysisKeys.delete(job.itemKey);
+        }
+      }
+    } finally {
+      this.analysisWorkerRunning = false;
+    }
+  }
+
+  async processExplanation(job) {
+    const stored = await this.store?.getLegislativeItemAnalysis?.(
+      job.itemKey,
+      LEGISLATIVE_LLM_ANALYSIS_VERSION,
+    );
+    const attempts = Number(stored?.attempts) || 0;
+    if (attempts >= 3) return;
+    const baseRecord = {
+      itemKey: job.itemKey,
+      analysisVersion: LEGISLATIVE_LLM_ANALYSIS_VERSION,
+      model: this.config.localLlmModel,
+      promptVersion: LEGISLATIVE_LLM_PROMPT_VERSION,
+      attempts: attempts + 1,
+    };
+    await this.store?.saveLegislativeItemAnalysis?.({ ...baseRecord, status: 'PROCESSING' });
+    try {
+      await this.localLlmClient.waitUntilReady();
+      const explanation = await this.localLlmClient.analyzeLegislativeItem(job.item, {
+        candidateName: job.candidate.ballotName || job.candidate.name,
+      });
+      await this.store?.saveLegislativeItemAnalysis?.({
+        ...baseRecord,
+        status: 'READY',
+        payload: {
+          ...explanation,
+          status: 'READY',
+          local: true,
+          analysisVersion: LEGISLATIVE_LLM_ANALYSIS_VERSION,
+          generatedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      await this.store?.saveLegislativeItemAnalysis?.({
+        ...baseRecord,
+        status: 'FAILED',
+        error: String(error.message || error).slice(0, 1000),
+      });
+      throw error;
+    }
+  }
+
+  async precomputeCandidates(candidates) {
+    if (!this.config.localLlmPrecomputeOnStart || !this.localLlmClient?.isEnabled() || this.precomputeRunning) return;
+    const eligible = (Array.isArray(candidates) ? candidates : [])
+      .filter((candidate) => candidate.legislative)
+      .slice(0, this.config.localLlmLegislativePrecomputeLimit);
+    this.precomputeRunning = true;
+    this.precomputeEligibleCandidates = eligible.length;
+    this.precomputeScannedCandidates = 0;
+    try {
+      for (const candidate of eligible) {
+        try {
+          await this.get(candidate, { background: true });
+        } catch (error) {
+          console.error(`Histórico legislativo não preparado para ${candidate.id}:`, error.message);
+        } finally {
+          this.precomputeScannedCandidates += 1;
+        }
+      }
+      await this.runAnalysisQueue();
+      this.precomputeCompletedAt = new Date().toISOString();
+    } finally {
+      this.precomputeRunning = false;
+    }
+  }
+
+  getStatus() {
+    return {
+      enabled: Boolean(this.localLlmClient?.isEnabled()),
+      queuedItems: this.analysisQueue.length,
+      workerRunning: this.analysisWorkerRunning,
+      precomputeRunning: this.precomputeRunning,
+      scannedCandidates: this.precomputeScannedCandidates,
+      eligibleCandidates: this.precomputeEligibleCandidates,
+      completedAt: this.precomputeCompletedAt,
+    };
   }
 
   async getDeputy(link) {
@@ -372,18 +555,29 @@ class LegislativeService {
       80,
     );
     const inspected = await mapWithConcurrency(selected, 8, (item) => inspectDeputyProposal(item, this.config));
-    const confirmed = inspected.filter((item) => item && isEnactedStatus(item.published.statusProposicao));
-    const enriched = await mapWithConcurrency(
+    const validInspected = inspected.filter(Boolean);
+    const confirmed = validInspected.filter((item) => isEnactedStatus(item.published.statusProposicao));
+    const enacted = await mapWithConcurrency(
       confirmed.slice(0, 12),
       4,
       (item) => enrichDeputyProposal(item, this.config, link.memberId),
     );
-    const laws = enriched.filter(Boolean).sort((left, right) => {
+    const enactedItems = enacted.filter(Boolean).sort((left, right) => {
       const role = { FIRST_SIGNATORY: 0, VERIFIED_AUTHOR: 1, COAUTHOR: 2 };
       return (role[left.authorship?.role] ?? 3) - (role[right.authorship?.role] ?? 3)
         || new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime();
-    }).slice(0, 3);
+    });
+    const missing = Math.max(0, 3 - enactedItems.length);
+    const pending = missing
+      ? await mapWithConcurrency(
+        validInspected.filter((item) => !isEnactedStatus(item.published.statusProposicao)).slice(0, missing),
+        Math.min(3, missing),
+        (item) => enrichDeputyProposal(item, this.config, link.memberId),
+      )
+      : [];
+    const laws = [...enactedItems, ...pending.filter(Boolean)].slice(0, 3);
     return {
+      profileVersion: LEGISLATIVE_PROFILE_VERSION,
       chamber: 'Câmara dos Deputados',
       profile: profile.status === 'fulfilled' ? profile.value.dados : null,
       expenses: {
@@ -396,7 +590,7 @@ class LegislativeService {
       methodology: {
         limit: 3,
         scanned: inspected.filter(Boolean).length,
-        rule: 'Até três propostas com autoria ou coautoria registrada que a situação detalhada da Câmara confirma como transformadas em norma. A primeira assinatura é priorizada.',
+        rule: 'Até três itens com autoria ou coautoria registrada. Normas confirmadas são priorizadas; quando há menos de três, o recorte é completado por projetos recentes claramente identificados como propostas.',
         impactRule: 'A conversão confirma efeito jurídico. Impacto social só pode ser chamado de medido quando houver avaliação pública oficial vinculada; sem ela, o VotoClaro informa a ausência.',
       },
       source: { name: SOURCES.camara.name, url: link.profileUrl, fetchedAt: new Date().toISOString(), confidence: 'OFFICIAL' },
@@ -422,6 +616,7 @@ class LegislativeService {
     const inspected = await mapWithConcurrency(selected, 8, (item) => enrichSenateMatter(item, this.config));
     const laws = inspected.filter(Boolean).slice(0, 3);
     return {
+      profileVersion: LEGISLATIVE_PROFILE_VERSION,
       chamber: 'Senado Federal',
       profile,
       expenses: null,
@@ -447,4 +642,5 @@ module.exports = {
   authorshipFromSenate,
   generatedNorm,
   selectLatestLegislativeItems,
+  legislativeItemKey,
 };

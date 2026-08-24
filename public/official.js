@@ -591,8 +591,8 @@ function renderCandidateDetail(candidate, snapshot) {
     ? `<section class="detail-section"><h3>Plano de governo</h3><div id="governmentPlanData"><div class="not-published"><strong>Documento entregue ao TSE.</strong><br>O vínculo usa o identificador oficial desta candidatura.<br><button class="secondary-button" type="button" data-load-government-plan="${escapeHtml(candidate.id)}">Ver resumo e plano oficial</button></div></div></section>`
     : `<section class="detail-section"><h3>Plano de governo</h3><div class="not-published"><strong>Este cargo não entrega plano de governo individual nesse conjunto do TSE.</strong><br>Planos de governo são publicados para presidente e governador. Para cargos legislativos, o histórico verificável de normas aparece abaixo quando há vínculo oficial exato.</div></section>`;
   const legislativeHistory = candidate.legislative
-    ? '<section class="detail-section"><h3>Leis e normas com autoria confirmada</h3><div id="legislativeData"><div class="mini-loading">Confirmando autoria e normas nas fontes legislativas oficiais…</div></div></section>'
-    : '<section class="detail-section"><h3>Leis e normas com autoria confirmada</h3><div class="not-published">Não há correspondência exata com um mandato parlamentar em exercício nas listas atuais da Câmara ou do Senado. Por segurança, nenhuma norma é atribuída apenas por semelhança de nome.</div></section>';
+    ? '<section class="detail-section"><h3>Leis e projetos com autoria confirmada</h3><div id="legislativeData"><div class="mini-loading">Confirmando autoria, projetos e normas nas fontes legislativas oficiais…</div></div></section>'
+    : '<section class="detail-section"><h3>Leis e projetos com autoria confirmada</h3><div class="not-published">Não há correspondência exata com um mandato parlamentar em exercício nas listas atuais da Câmara ou do Senado. Por segurança, nenhum projeto ou norma é atribuído apenas por semelhança de nome.</div></section>';
   const ticketEligible = ['PRESIDENTE', 'GOVERNADOR', 'SENADOR'].includes(String(candidate.office || '').toUpperCase());
   const runningMates = Array.isArray(candidate.runningMates) ? candidate.runningMates : [];
   const ticket = ticketEligible
@@ -707,13 +707,29 @@ function renderIntegrityMoney(data) {
 async function loadLegislative(id) {
   const container = byId('legislativeData');
   if (!container) return;
-  container.innerHTML = '<div class="mini-loading">Confirmando autoria e normas nas fontes legislativas oficiais…</div>';
+  container.innerHTML = '<div class="mini-loading">Confirmando autoria, projetos e normas nas fontes legislativas oficiais…</div>';
   try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative`);
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative?v=legislative-profile-v3`);
     container.innerHTML = renderLegislativeContent(payload.data, false);
+    clearTimeout(container.legislativePollTimer);
+    if (payload.data?.laws?.some((law) => ['QUEUED', 'PROCESSING'].includes(law.plainLanguage?.status))) {
+      container.legislativePollTimer = setTimeout(() => loadLegislative(id), 6000);
+    }
   } catch {
     container.innerHTML = '<div class="not-published">A Câmara ou o Senado não respondeu agora. Nenhuma lei foi atribuída sem confirmação.</div>';
   }
+}
+
+function renderLegislativePlainLanguage(proposal) {
+  const explanation = proposal.plainLanguage;
+  if (!explanation) return '';
+  if (explanation.status === 'READY') {
+    return `<section class="law-ai-explanation"><div class="law-ai-heading"><span>LEITURA EM LINGUAGEM SIMPLES · IA LOCAL</span><small>Baseada apenas na ementa e situação oficiais</small></div><div class="law-ai-grid"><article><strong>O que isso quer dizer</strong><p>${escapeHtml(explanation.plainLanguage)}</p></article><article><strong>O que pode mudar na prática</strong><p>${escapeHtml(explanation.possibleImpact)}</p></article><article class="law-fine-print"><strong>A letra miúda</strong><p>${escapeHtml(explanation.finePrint)}</p></article></div></section>`;
+  }
+  if (['QUEUED', 'PROCESSING'].includes(explanation.status)) {
+    return '<div class="law-ai-pending"><strong>Explicação em preparação automática</strong><span>A fonte oficial já está disponível. A IA local está traduzindo a ementa sem alterar o texto original.</span></div>';
+  }
+  return '<div class="law-ai-pending is-failed"><strong>A explicação automática ainda não ficou pronta</strong><span>A ementa e os links oficiais abaixo continuam disponíveis para conferência.</span></div>';
 }
 
 function renderIntegrityData(data, compact = false) {
@@ -741,6 +757,7 @@ function proposalCard(proposal) {
     <div class="proposal-heading"><strong>${escapeHtml(proposal.lawTitle || proposal.title || `${proposal.type} ${proposal.number}/${proposal.year}`)}</strong>${proposal.date ? `<time>proposta apresentada em ${formatDate(proposal.date, false)}</time>` : ''}</div>
     <div class="proposal-themes"><span>${escapeHtml(proposal.authorship?.label || 'Autoria oficial confirmada')}</span></div>
     ${themes}
+    ${renderLegislativePlainLanguage(proposal)}
     <div class="proposal-block"><span>O que mudou juridicamente — ementa oficial</span><p>${escapeHtml(proposal.summary || 'Ementa não publicada.')}</p></div>
     <div class="proposal-block"><span>Confirmação da fonte legislativa</span><p>${escapeHtml(proposal.status || 'Norma gerada confirmada na consulta oficial.')}</p></div>
     <div class="effect-evidence effect-${escapeHtml(String(evidence.stage || '').toLowerCase())}"><strong>${escapeHtml(evidence.label)}</strong><p>${escapeHtml(evidence.explanation)}</p></div>
@@ -760,7 +777,7 @@ function renderLegislativeContent(data, includeExpenses = false) {
     : '';
   const laws = data.laws?.length
     ? `<div class="proposal-list">${data.laws.slice(0, 3).map(proposalCard).join('')}</div>`
-    : '<div class="not-published"><strong>Nenhuma norma passou por todas as confirmações deste recorte.</strong><br>Isso não prova que a pessoa nunca participou de outra lei: a consulta cobre as autorias retornadas para o mandato vinculado e exige que a própria Casa identifique a norma gerada.</div>';
+    : '<div class="not-published"><strong>Nenhum projeto ou norma passou por todas as confirmações deste recorte.</strong><br>Isso não prova que a pessoa nunca participou de outra matéria: a consulta cobre somente as autorias retornadas para o mandato vinculado.</div>';
   return `<div class="legislative-results">${facts}${data.note ? `<p class="muted">${escapeHtml(data.note)}</p>` : ''}<p class="method-note">${escapeHtml(data.methodology?.rule || 'Recorte de normas e autorias publicado pela Casa legislativa.')} ${escapeHtml(data.methodology?.impactRule || '')}</p>${laws}<p class="muted">Consultado em ${formatDate(data.source.fetchedAt)} · <a href="${escapeHtml(data.source.url)}" target="_blank" rel="noopener noreferrer">fonte oficial</a></p></div>`;
 }
 
@@ -989,7 +1006,7 @@ async function candidateEvidence(candidate) {
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v14`)
       : Promise.resolve(null),
     candidate.legislative
-      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative`)
+      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative?v=legislative-profile-v3`)
       : Promise.resolve(null),
     requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/integrity`),
   ]);
@@ -1022,7 +1039,7 @@ function comparisonEvidenceColumn(candidate, evidence) {
   }
 
   const integrity = renderIntegrityData(evidence.integrity, true);
-  return `<section class="evidence-column"><h3>${escapeHtml(candidate.ballotName)}</h3><div class="evidence-section"><h4>Plano de governo</h4>${plan}</div><div class="evidence-section"><h4>Leis e normas com autoria confirmada</h4>${legislative}</div><div class="evidence-section"><h4>Fiscalização e integridade</h4>${integrity}</div></section>`;
+  return `<section class="evidence-column"><h3>${escapeHtml(candidate.ballotName)}</h3><div class="evidence-section"><h4>Plano de governo</h4>${plan}</div><div class="evidence-section"><h4>Leis e projetos com autoria confirmada</h4>${legislative}</div><div class="evidence-section"><h4>Fiscalização e integridade</h4>${integrity}</div></section>`;
 }
 
 async function renderComparisonEvidence(candidates, comparisonKey) {
