@@ -1,3 +1,4 @@
+require('../src/install-safe-console').installSafeConsole();
 const { store, synchronizer, initializeRuntime } = require('../src/runtime');
 
 async function main() {

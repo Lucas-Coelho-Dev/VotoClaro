@@ -1,3 +1,4 @@
+require('../src/install-safe-console').installSafeConsole();
 const { checksum } = require('../src/normalize');
 const { SOURCES } = require('../src/sources');
 const { store, photoSynchronizer, initializeRuntime } = require('../src/runtime');

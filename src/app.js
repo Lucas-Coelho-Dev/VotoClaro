@@ -19,6 +19,7 @@ const {
 const { publicSources } = require('./sources');
 const { searchable, isVoterFacingOffice, attachRunningMates } = require('./normalize');
 const { IDEOLOGY_SOURCE, IDEOLOGY_FILTERS, getPartyIdeology, partyMarkSvg } = require('./parties');
+const { safeErrorMessage } = require('./safe-log');
 const {
   LOCAL_LLM_ANALYSIS_VERSION,
   LOCAL_LLM_PROMPT_VERSION,
@@ -51,14 +52,38 @@ app.use(helmet({
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
 app.use(compression());
+app.use((request, response, next) => {
+  response.setHeader('X-Request-Id', crypto.randomUUID());
+  next();
+});
 app.use(express.json({ limit: '32kb', type: 'application/json' }));
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 300,
+const rateLimitWindowMs = config.apiRateLimitWindowMinutes * 60 * 1000;
+const apiRateLimit = rateLimit({
+  windowMs: rateLimitWindowMs,
+  limit: config.apiRateLimitMax,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  skip: (request) => request.path === '/api/v1/health',
-}));
+  message: { error: 'TOO_MANY_REQUESTS', message: 'Muitas solicitações foram feitas neste aparelho. Aguarde alguns minutos e tente novamente.' },
+});
+
+app.use('/api/', apiRateLimit);
+
+const heavyRateLimit = rateLimit({
+  windowMs: rateLimitWindowMs,
+  limit: config.heavyRateLimitMax,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'TOO_MANY_HEAVY_REQUESTS', message: 'Muitas consultas detalhadas foram solicitadas. Aguarde alguns minutos e tente novamente.' },
+});
+
+const adminRateLimit = rateLimit({
+  windowMs: rateLimitWindowMs,
+  limit: config.adminRateLimitMax,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'TOO_MANY_ADMIN_ATTEMPTS', message: 'Muitas tentativas administrativas. Acesso temporariamente bloqueado.' },
+});
 
 const candidateViewRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -71,7 +96,7 @@ const candidateViewRateLimit = rateLimit({
   },
 });
 
-app.use(async (request, response, next) => {
+app.use('/api/v1', async (request, response, next) => {
   try {
     await initializeRuntime();
     response.setHeader('X-Data-Policy', 'official-primary-secondary-attributed');
@@ -529,7 +554,7 @@ app.get('/api/v1/candidates/:id/government-plan/status', async (request, respons
   }
 });
 
-app.get('/api/v1/candidates/:id/government-plan/summary', async (request, response, next) => {
+app.get('/api/v1/candidates/:id/government-plan/summary', heavyRateLimit, async (request, response, next) => {
   try {
     const snapshot = snapshotOrUnavailable(response);
     if (!snapshot) return;
@@ -560,7 +585,7 @@ app.get('/api/v1/candidates/:id/government-plan/summary', async (request, respon
   }
 });
 
-app.get('/api/v1/candidates/:id/government-plan', async (request, response, next) => {
+app.get('/api/v1/candidates/:id/government-plan', heavyRateLimit, async (request, response, next) => {
   try {
     const snapshot = snapshotOrUnavailable(response);
     if (!snapshot) return;
@@ -606,7 +631,7 @@ app.get('/api/v1/candidates/:id', (request, response) => {
   });
 });
 
-app.get('/api/v1/candidates/:id/legislative', async (request, response, next) => {
+app.get('/api/v1/candidates/:id/legislative', heavyRateLimit, async (request, response, next) => {
   try {
     const snapshot = snapshotOrUnavailable(response);
     if (!snapshot) return;
@@ -622,7 +647,7 @@ app.get('/api/v1/candidates/:id/legislative', async (request, response, next) =>
   }
 });
 
-app.get('/api/v1/candidates/:id/integrity', async (request, response, next) => {
+app.get('/api/v1/candidates/:id/integrity', heavyRateLimit, async (request, response, next) => {
   try {
     const snapshot = snapshotOrUnavailable(response);
     if (!snapshot) return;
@@ -665,27 +690,37 @@ function safeSecretMatch(provided, expected) {
   return providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
+function bearerToken(request) {
+  const authorization = request.get('authorization') || '';
+  return authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+}
+
+function requireAdministrativeSecret(expected, missingCode) {
+  return (request, response, next) => {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!expected) return response.status(503).json({ error: missingCode, message: 'A proteção administrativa ainda não foi configurada no servidor.' });
+    if (!safeSecretMatch(bearerToken(request), expected)) return response.status(401).json({ error: 'UNAUTHORIZED' });
+    return next();
+  };
+}
+
 async function authenticatedSync(request, response, next) {
   try {
-    if (!config.syncSecret) return response.status(503).json({ error: 'SYNC_NOT_CONFIGURED', message: 'Defina SYNC_SECRET ou CRON_SECRET.' });
-    const authorization = request.get('authorization') || '';
-    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-    if (!safeSecretMatch(token, config.syncSecret)) return response.status(401).json({ error: 'UNAUTHORIZED' });
     const result = await synchronizer.synchronize('authenticated-request');
     return response.json({ message: 'Sincronização oficial concluída.', snapshot: result });
   } catch (error) {
     return next(error);
   }
 }
-app.post('/api/v1/admin/sync', authenticatedSync);
-app.get('/api/v1/admin/sync', authenticatedSync);
+app.post('/api/v1/admin/sync', adminRateLimit, requireAdministrativeSecret(config.syncSecret, 'SYNC_NOT_CONFIGURED'), authenticatedSync);
+app.all('/api/v1/admin/sync', (request, response) => {
+  response.setHeader('Allow', 'POST');
+  response.setHeader('Cache-Control', 'no-store');
+  return response.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Use POST com autenticação Bearer.' });
+});
 
-app.patch('/api/v1/admin/reports/:trackingCode', async (request, response, next) => {
+app.patch('/api/v1/admin/reports/:trackingCode', adminRateLimit, requireAdministrativeSecret(config.adminSecret, 'ADMIN_NOT_CONFIGURED'), async (request, response, next) => {
   try {
-    if (!config.syncSecret) return response.status(503).json({ error: 'ADMIN_NOT_CONFIGURED', message: 'Defina SYNC_SECRET.' });
-    const authorization = request.get('authorization') || '';
-    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-    if (!safeSecretMatch(token, config.syncSecret)) return response.status(401).json({ error: 'UNAUTHORIZED' });
     const trackingCode = String(request.params.trackingCode || '').trim().toUpperCase();
     if (!/^VC-[A-F0-9]{12}$/.test(trackingCode)) return response.status(400).json({ error: 'INVALID_TRACKING_CODE' });
     const update = analysisReportUpdateSchema.parse(request.body);
@@ -712,15 +747,22 @@ app.get(['/', '/index.html'], (request, response) => {
   response.sendFile(path.join(config.publicDir, 'official.html'));
 });
 app.use(express.static(config.publicDir, { index: false, maxAge: '1h', dotfiles: 'ignore' }));
-app.get('*', (request, response) => response.sendFile(path.join(config.publicDir, 'official.html')));
+app.use('/api/', (request, response) => response.status(404).json({
+  error: 'API_ROUTE_NOT_FOUND',
+  message: 'Este endereço da API não existe.',
+}));
+app.get('*', (request, response) => response.status(404).sendFile(path.join(config.publicDir, 'error.html')));
 
 app.use((error, request, response, next) => {
   if (response.headersSent) return next(error);
   if (error instanceof z.ZodError) {
     return response.status(400).json({ error: 'INVALID_REQUEST', message: 'Filtros inválidos.', details: error.issues });
   }
-  console.error('[VotoClaro] Erro de requisição:', error.message);
-  return response.status(500).json({ error: 'INTERNAL_ERROR', message: 'Não foi possível concluir a operação.' });
+  console.error('[VotoClaro] Erro de requisição:', safeErrorMessage(error));
+  if (!request.path.startsWith('/api/') && request.accepts('html')) {
+    return response.status(500).sendFile(path.join(config.publicDir, 'error.html'));
+  }
+  return response.status(500).json({ error: 'INTERNAL_ERROR', message: 'Não foi possível concluir a operação.', requestId: response.getHeader('X-Request-Id') || undefined });
 });
 
 module.exports = app;

@@ -1,3 +1,4 @@
+require('../src/install-safe-console').installSafeConsole();
 const {
   config,
   store,

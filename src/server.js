@@ -1,3 +1,4 @@
+require('./install-safe-console').installSafeConsole();
 const app = require('./app');
 const {
   config,

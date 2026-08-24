@@ -1,3 +1,4 @@
+require('./install-safe-console').installSafeConsole();
 const config = require('./config');
 const { SnapshotStore } = require('./persistence');
 const { OfficialDataSync } = require('./official-sync');

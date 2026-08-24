@@ -11,10 +11,12 @@
     "sync:photos": "node scripts/sync-photos.js",
     "worker:sync": "node scripts/run-sync-worker.js",
     "worker:ai": "node scripts/run-ai-worker.js",
+    "monitor": "node scripts/run-monitor.js",
+    "production:prepare": "node scripts/prepare-production.js",
     "db:migrate": "node scripts/migrate.js",
     "db:import-photos": "node scripts/import-photo-cache.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/app.js && node --check src/parties.js && node --check src/persistence.js && node --check src/official-sync.js && node --check src/ranged-download.js && node --check src/photo-sync.js && node --check src/sources.js && node --check src/geography.js && node --check src/government-plans.js && node --check src/plan-summary.js && node --check src/local-llm.js && node --check src/plan-llm-analysis.js && node --check src/legislative.js && node --check src/integrity.js && node --check scripts/bootstrap-codespaces.js && node --check scripts/import-photo-cache.js && node --check scripts/run-sync-worker.js && node --check scripts/run-ai-worker.js && node --check public/geolocation.js && node --check public/official.js"
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/safe-log.js && node --check src/install-safe-console.js && node --check src/operational-monitor.js && node --check src/parties.js && node --check src/persistence.js && node --check src/official-sync.js && node --check src/ranged-download.js && node --check src/photo-sync.js && node --check src/sources.js && node --check src/geography.js && node --check src/government-plans.js && node --check src/plan-summary.js && node --check src/local-llm.js && node --check src/plan-llm-analysis.js && node --check src/legislative.js && node --check src/integrity.js && node --check scripts/bootstrap-codespaces.js && node --check scripts/import-photo-cache.js && node --check scripts/run-sync-worker.js && node --check scripts/run-ai-worker.js && node --check scripts/run-monitor.js && node --check scripts/prepare-production.js && node --check public/geolocation.js && node --check public/official.js"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

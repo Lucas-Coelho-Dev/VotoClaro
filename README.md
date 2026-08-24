@@ -54,7 +54,7 @@ Sem `DATABASE_URL`, somente dados públicos são armazenados em `data/latest.jso
 
 ### IA local para planos de governo
 
-A IA é opcional no desenvolvimento e habilitada pelo `compose.free.yml` na hospedagem recomendada. O modelo Qwen3 4B quantizado é executado pelo `llama.cpp` dentro da própria VM; nenhum texto do PDF é enviado para uma API externa e não há cobrança por chamada. O processamento ocorre em fila, uma análise por vez, com resposta transmitida continuamente para evitar quedas em gerações longas. O resultado fica no PostgreSQL e no cache persistente pelo checksum do documento.
+A IA é opcional no desenvolvimento e habilitada pelo `compose.production.yml` na hospedagem recomendada. O modelo Qwen3 1.7B quantizado é executado pelo `llama.cpp` dentro da própria VM; nenhum texto do PDF é enviado para uma API externa e não há cobrança por chamada. O processamento ocorre em fila, uma análise por vez, com resposta transmitida continuamente para evitar quedas em gerações longas. O resultado fica no PostgreSQL e no cache persistente pelo checksum do documento.
 
 O sistema extrativo continua sendo o fallback imediato. A IA recebe somente um conjunto curto de evidências selecionadas nos nove temas, produz um objetivo central e explica até três prioridades em linguagem simples. Possíveis impactos em quatro anos são qualitativos, condicionais e separados do conteúdo oficial. Citações precisam existir na página indicada, a classificação temática precisa coincidir com a leitura documental e números gerados que não constem nas evidências são descartados. A interface acompanha o processamento e atualiza o resultado automaticamente.
 
@@ -78,7 +78,7 @@ O sistema extrativo continua sendo o fallback imediato. A IA recebe somente um c
 | `GET /api/v1/candidates/:id/legislative` | Até cinco projetos recentes do mandato atual verificado |
 | `GET /api/v1/candidates/:id/integrity` | TCU, sanções administrativas, valores eleitorais e despesas parlamentares por vínculo exato |
 | `GET /api/v1/changes` | Alterações detectadas entre versões |
-| `GET/POST /api/v1/admin/sync` | Sincronização protegida por segredo |
+| `POST /api/v1/admin/sync` | Sincronização protegida por segredo montado somente no servidor |
 
 Filtros de candidaturas: `q`, `office`, `uf`, `party`, `ideology`, `status`, `page` e `pageSize`. `ideology` aceita `ESQUERDA`, `CENTRO`, `DIREITA` e `NAO_CLASSIFICADO`. Consulte a [metodologia da classificação partidária](public/methodology.html#ideologia-partidaria).
 
@@ -137,7 +137,7 @@ npm audit
 
 ## Produção
 
-Para testar publicamente sem mensalidade, consulte [DEPLOY_FREE.md](DEPLOY_FREE.md): Oracle Cloud Always Free, armazenamento persistente, Docker Compose e HTTPS automático. As alternativas pagas e os cuidados de produção ficam em [DEPLOY.md](DEPLOY.md) e [OPERATIONS.md](OPERATIONS.md). Antes do lançamento, preencha o responsável e o canal de privacidade em `public/privacy.html`.
+Para testar publicamente sem mensalidade, consulte [DEPLOY_FREE.md](DEPLOY_FREE.md): Oracle Cloud Always Free, serviços isolados, segredos de arquivo, backup com restauração verificada, monitoramento e HTTPS automático. A implantação final usa `compose.production.yml`; `compose.free.yml` permanece apenas para instalações antigas. As alternativas pagas e os cuidados de produção ficam em [DEPLOY.md](DEPLOY.md) e [OPERATIONS.md](OPERATIONS.md). Antes do lançamento, preencha o responsável e o canal de privacidade em `public/privacy.html`.
 
 ## Licença e atribuição
 

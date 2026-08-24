@@ -56,6 +56,6 @@ Force HTTPS e HSTS, não coloque segredos no frontend e mantenha respostas públ
 
 ## Serviços separados na Oracle
 
-O `compose.free.yml` mantém seis responsabilidades isoladas: `app` serve o site e a API; `db` mantém o PostgreSQL; `llm` executa o modelo; `ai-worker` prepara resumos e explicações; `sync-worker` atualiza as fontes oficiais; e `caddy` termina HTTPS e encaminha o tráfego. O site continua respondendo enquanto a IA ou a importação usam CPU intensivamente.
+O `compose.production.yml` mantém responsabilidades isoladas: `app` serve o site e a API; `db` mantém o PostgreSQL; `llm` executa o modelo; `ai-worker` prepara resumos e explicações; `sync-worker` atualiza as fontes oficiais; `backup-worker` protege banco e resumos; `monitor-worker` acompanha disponibilidade, backup e disco; e `caddy` termina HTTPS. O site continua respondendo enquanto a IA ou a importação usam CPU intensivamente.
 
 O sincronizador publica uma nova versão somente depois de concluir e validar o conjunto principal de candidaturas. Se bens, fotos ou prestações de contas falharem, mantém-se o último conjunto válido daquela fonte e o painel público registra o alerta, a tentativa e o último sucesso.

@@ -1,4 +1,28 @@
+{
+	email {$ACME_EMAIL}
+}
+
 {$SITE_HOST} {
-  encode zstd gzip
-  reverse_proxy app:3000
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=()"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# Sem access log: busca eleitoral, IP e identificadores do aparelho não são necessários.
+	reverse_proxy app:3000 {
+		health_uri /api/v1/health
+		health_interval 30s
+		health_timeout 10s
+		lb_try_duration 5s
+	}
+
+	handle_errors {
+		root * /srv/public
+		rewrite * /error.html
+		file_server
+	}
 }

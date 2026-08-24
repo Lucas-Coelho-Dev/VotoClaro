@@ -16,6 +16,16 @@ Monitore a cada cinco minutos:
 - duração e memória da sincronização.
 - fila, última conclusão e última falha de `localPlanAnalysis` em `/api/v1/health`;
 - uso de memória e CPU do serviço `llm`, mantendo apenas uma análise simultânea.
+- percentual de disco e idade do último backup no `monitor-worker`;
+- data do último teste integral de restauração em `backups-production/latest-restore-test.ok`.
+
+## Backup e restauração
+
+- `backup-worker` executa `pg_dump` diário em formato customizado e copia `government-plan-summaries`.
+- Os arquivos permanecem por 14 dias, configuráveis por `BACKUP_RETENTION_DAYS`.
+- `pg_restore --list` valida cada arquivo; a cada sete dias, uma restauração integral é feita no banco isolado `votoclaro_restore_verify` e depois removida.
+- Copie `backups-production` diariamente para fora da VM. O mesmo disco não é recuperação de desastre.
+- Nunca restaure por cima do banco ativo. Pare os serviços de escrita, crie outro banco, valide contagens/checksum e só então altere a conexão da aplicação.
 
 O portal considera os dados vencidos após 36 horas sem snapshot novo. Uma fonte vencida deve permanecer visível, com o horário real da última atualização.
 

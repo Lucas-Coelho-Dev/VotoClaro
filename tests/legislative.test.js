@@ -8,6 +8,7 @@ const {
   generatedNorm,
   selectLatestLegislativeItems,
   legislativeItemKey,
+  LegislativeService,
 } = require('../src/legislative');
 
 test('não transforma uma proposição em impacto real sem norma', () => {
@@ -57,4 +58,21 @@ test('gera chave estável por parlamentar, norma e conteúdo oficial', () => {
   const item = { id: '10', title: 'PL 10/2026', lawTitle: 'Lei 20/2026', summary: 'Ementa oficial', status: 'Norma gerada' };
   assert.equal(legislativeItemKey(candidate, item), legislativeItemKey(candidate, { ...item }));
   assert.notEqual(legislativeItemKey(candidate, item), legislativeItemKey(candidate, { ...item, summary: 'Ementa atualizada' }));
+});
+
+test('site separado da IA lê explicações prontas sem iniciar processamento', async () => {
+  const payload = { status: 'READY', summary: 'Explicação já validada.' };
+  const service = new LegislativeService(
+    { aiWorkerAvailable: true },
+    { getLegislativeItemAnalysis: async () => ({ status: 'READY', payload }) },
+    { isEnabled: () => false },
+  );
+  const result = await service.attachExplanations(
+    { legislative: { chamber: 'CAMARA', memberId: '99' } },
+    { laws: [{ id: '10', title: 'PL 10/2026' }] },
+    'interactive',
+  );
+  assert.deepEqual(result.laws[0].plainLanguage, payload);
+  assert.equal(service.getStatus().mode, 'DEDICATED_WORKER');
+  assert.equal(service.analysisQueue.length, 0);
 });

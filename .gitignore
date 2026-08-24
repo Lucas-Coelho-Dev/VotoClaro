@@ -11,6 +11,10 @@ data/photos/
 data/government-plans/
 data/government-plan-summaries/
 integrations/
+secrets/*
+!secrets/.gitignore
+backups-production/
+data-production/
 coverage/
 npm-debug.log*
 .DS_Store

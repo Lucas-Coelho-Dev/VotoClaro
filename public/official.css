@@ -31,6 +31,7 @@ button, input, select { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; touch-action: manipulation; }
 a { color: var(--blue); }
+:where(a, button, input, select, textarea, summary):focus-visible { outline: 3px solid #f5b700; outline-offset: 3px; }
 .skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; transform: translateY(-150%); background: #fff; padding: 10px 14px; border-radius: 8px; }
 .skip-link:focus { transform: none; }
 
@@ -493,6 +494,16 @@ a { color: var(--blue); }
 .principle-list { display: grid; gap: 10px; padding: 0; list-style: none; }
 .principle-list li { padding: 13px 15px; border-left: 3px solid var(--blue); background: var(--blue-soft); }
 
+.error-page { min-height: 100dvh; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: linear-gradient(145deg, #edf5ff, #f8fafc); }
+.error-card { width: min(620px, 100%); padding: clamp(24px, 7vw, 52px); border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: var(--shadow); text-align: center; }
+.error-card img { border-radius: 15px; }
+.error-card .eyebrow { margin-top: 16px; }
+.error-card h1 { margin: 8px 0 12px; color: var(--navy); font-size: clamp(28px, 7vw, 44px); line-height: 1.08; letter-spacing: -.04em; }
+.error-card > p:not(.eyebrow) { color: var(--muted); }
+.error-actions { display: flex; justify-content: center; gap: 10px; margin-top: 24px; }
+.error-actions .primary-button, .error-actions .secondary-button { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.error-help { margin: 22px 0 0; font-size: 12px; }
+
 @media (max-width: 1160px) {
   .candidate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .popular-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -655,8 +666,16 @@ a { color: var(--blue); }
   .card-heading { align-items: flex-start; flex-direction: column; }
   .colinha-actions { grid-template-columns: 1fr; }
 }
+@media (max-width: 480px) {
+  .error-actions { flex-direction: column; }
+  .error-actions > * { width: 100%; }
+}
 @media (hover: none) {
   .candidate-card:hover { transform: none; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 @media print {
   .site-header, .hero, .primary-column, .site-footer, .creator-watermark, .colinha-actions, .inline-link { display: none !important; }

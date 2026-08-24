@@ -608,9 +608,6 @@ class GovernmentPlanSummaryService {
 
   async withAnalysisState(sha256, summary, storedAnalysis = undefined) {
     if (!summary) return null;
-    if (!this.localLlmClient?.isEnabled()) {
-      return { ...this.publicAnalysisPayload(summary), aiAnalysis: { status: 'DISABLED', local: true } };
-    }
     const stored = storedAnalysis === undefined
       ? await this.store?.getGovernmentPlanAnalysis?.(sha256, LOCAL_LLM_ANALYSIS_VERSION)
       : storedAnalysis;
@@ -619,6 +616,23 @@ class GovernmentPlanSummaryService {
     }
     if (summary.aiAnalysis?.status === 'READY'
       && summary.aiAnalysis?.analysisVersion === LOCAL_LLM_ANALYSIS_VERSION) return this.publicAnalysisPayload(summary);
+    if (!this.localLlmClient?.isEnabled()) {
+      return {
+        ...this.publicAnalysisPayload(summary),
+        aiAnalysis: this.config.aiWorkerAvailable ? {
+          status: stored?.status || 'QUEUED',
+          local: true,
+          mode: 'DEDICATED_WORKER',
+          model: stored?.model || this.config.localLlmModel,
+          analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+          promptVersion: stored?.promptVersion || LOCAL_LLM_PROMPT_VERSION,
+          stage: stored?.payload?.aiAnalysis?.stage || 'WAITING',
+          completed: Number(stored?.payload?.aiAnalysis?.completed) || 0,
+          total: Number(stored?.payload?.aiAnalysis?.total) || 1,
+          updatedAt: stored?.updatedAt || null,
+        } : { status: 'DISABLED', local: true },
+      };
+    }
     const progress = stored?.payload?.aiAnalysis || {};
     return {
       ...this.publicAnalysisPayload(summary),
@@ -807,8 +821,11 @@ class GovernmentPlanSummaryService {
   }
 
   getStatus() {
+    const localStatus = this.localLlmClient?.getStatus() || {};
     return {
-      ...this.localLlmClient?.getStatus(),
+      ...localStatus,
+      enabled: Boolean(localStatus.enabled || this.config.aiWorkerAvailable),
+      mode: !localStatus.enabled && this.config.aiWorkerAvailable ? 'DEDICATED_WORKER' : localStatus.mode,
       queuedDocuments: this.llmQueue.length,
       workerRunning: this.llmWorkerRunning,
       precomputeRunning: this.precomputeRunning,
@@ -842,7 +859,7 @@ class GovernmentPlanSummaryService {
         documentSha256: plan.sha256,
         generatedAt: new Date().toISOString(),
         source: plan.source,
-        aiAnalysis: this.localLlmClient?.isEnabled() ? {
+        aiAnalysis: (this.localLlmClient?.isEnabled() || this.config.aiWorkerAvailable) ? {
           status: 'QUEUED',
           local: true,
           model: this.config.localLlmModel,

@@ -6,6 +6,7 @@ const {
   normalizePdfText,
   THEMES,
 } = require('../src/plan-summary');
+const { LOCAL_LLM_ANALYSIS_VERSION } = require('../src/local-llm');
 
 const pages = [
   { page: 3, text: '1. EDUCAÇÃO\nA proposta estabelece a criação de novas escolas de ensino integral e a formação continuada de professores da rede pública.' },
@@ -130,6 +131,25 @@ test('corrige o caractere inválido também em análises já armazenadas', () =>
   assert.equal(cleaned.themeSummaries[0].proposals[0].text, 'Instituir o Programa Estadual de Educadores Ambientais Comunitários.');
   assert.equal(cleaned.themeSummaries[0].proposals[0].evidences[0].quote, 'Instituir o Programa Estadual.');
   assert.equal(cleaned.themeSummaries[0].sections[0], 'Instituir');
+});
+
+test('site separado da IA publica resultado pronto sem executar o modelo', async () => {
+  const service = Object.create(GovernmentPlanSummaryService.prototype);
+  service.config = { aiWorkerAvailable: true, localLlmModel: 'modelo-local' };
+  service.localLlmClient = { isEnabled: () => false };
+  service.store = {
+    getGovernmentPlanAnalysis: async () => ({
+      status: 'READY',
+      payload: {
+        version: 'thematic-v8',
+        themeSummaries: [],
+        aiAnalysis: { status: 'READY', analysisVersion: LOCAL_LLM_ANALYSIS_VERSION },
+      },
+    }),
+  };
+  const result = await service.withAnalysisState('abc', { themeSummaries: [] });
+  assert.equal(result.aiAnalysis.status, 'READY');
+  assert.equal(service.localLlmClient.isEnabled(), false);
 });
 
 test('remove número de página isolado antes do primeiro parágrafo', () => {

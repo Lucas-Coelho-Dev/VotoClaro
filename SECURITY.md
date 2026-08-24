@@ -12,12 +12,17 @@
 
 - Helmet e política de conteúdo restritiva;
 - limite de requisições;
+- limite separado para consultas pesadas e tentativas administrativas;
 - corpo JSON limitado;
 - rota de sincronização protegida por segredo e comparação resistente a timing;
 - normalização que descarta CPF, e-mail e título eleitoral dos arquivos do TSE;
 - colinha em armazenamento local;
 - snapshots públicos versionados por checksum;
 - banco PostgreSQL sem tabelas de usuários ou votos.
+- segredos montados como arquivos somente nos contêineres autorizados;
+- administração somente por método mutável explícito e Bearer token, sem segredo na URL;
+- access log HTTP desativado para não registrar IP nem termos de busca eleitoral;
+- páginas públicas continuam disponíveis com erro amigável quando o banco estiver indisponível.
 
 ## Antes do lançamento
 

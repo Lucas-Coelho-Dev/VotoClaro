@@ -9,7 +9,7 @@ O caminho usa:
 - Oracle Cloud Always Free para computação e disco persistente;
 - Docker Compose para executar a aplicação;
 - PostgreSQL para guardar snapshots, fotos, análises e contagens sem baixar tudo a cada abertura;
-- Qwen3 4B quantizado com `llama.cpp` para analisar os PDFs dentro da própria máquina;
+- Qwen3 1.7B quantizado com `llama.cpp` para analisar os PDFs dentro da própria máquina;
 - Caddy para HTTPS automático;
 - `sslip.io` para um endereço gratuito imediato, ou DuckDNS para um nome estável.
 
@@ -37,36 +37,36 @@ Na VM, instale Docker Engine e o plugin Docker Compose conforme o [guia oficial 
 git clone https://github.com/Lucas-Coelho-Dev/VotoClaro.git
 cd VotoClaro
 cp .env.free.example .env.free
-mkdir -p data-production
-sudo chown -R 1000:1000 data-production
+npm run production:prepare -- --host=voto.seudominio.com.br --email=voce@example.com
+sudo chown -R 1000:1000 data-production backups-production
 ```
 
 ## 3. Definir endereço e segredos
 
-Descubra o IP público. Se ele for `203.0.113.10`, use no arquivo `.env.free`:
+No registrador do domínio, crie um registro `A` apontando `voto.seudominio.com.br` para o IP público fixo da VM. Depois confirme no `.env.free`:
 
 ```dotenv
-SITE_HOST=votoclaro.203-0-113-10.sslip.io
-POSTGRES_PASSWORD=uma-senha-longa-e-exclusiva-para-o-banco
-SYNC_SECRET=um-valor-longo-unico-e-aleatorio
-CRON_SECRET=outro-valor-longo-unico-e-aleatorio
+SITE_HOST=voto.seudominio.com.br
+ACME_EMAIL=voce@example.com
 ```
 
-O `sslip.io` direciona gratuitamente nomes contendo o IP para esse IP. Para um endereço que continue igual se o IP mudar, crie um subdomínio no [DuckDNS](https://www.duckdns.org/) e coloque esse domínio em `SITE_HOST`.
+Para testar antes de comprar um domínio, `votoclaro.203-0-113-10.sslip.io` continua válido como `SITE_HOST`, trocando o IP do exemplo pelo da VM.
+
+`production:prepare` cria senhas diferentes em `secrets/` com permissão restrita. O Docker concede cada segredo somente aos serviços autorizados. Não copie essas chaves para JavaScript, HTML, `.env.free` ou GitHub. Para habilitar o Portal da Transparência, grave a chave apenas em `secrets/portal_transparencia_token.txt`.
 
 O Caddy obtém e renova o certificado HTTPS automaticamente quando o nome resolve para a VM e as portas 80 e 443 estão acessíveis. HTTPS é necessário para a localização funcionar nos celulares.
 
 ## 4. Iniciar
 
 ```bash
-docker compose --env-file .env.free -f compose.free.yml up -d --build
-docker compose --env-file .env.free -f compose.free.yml logs -f app
+docker compose --env-file .env.free -f compose.production.yml up -d --build
+docker compose --env-file .env.free -f compose.production.yml logs -f app
 ```
 
-Na primeira inicialização, o serviço `llm` também baixa aproximadamente 2,5 GB do modelo Qwen3 4B para o volume persistente `llm_models`. Esse download não se repete em reinicializações normais. O portal e o resumo extrativo abrem enquanto a fila aguarda o teste de saúde do modelo ficar pronto em segundo plano. Para acompanhar:
+Na primeira inicialização, o serviço `llm` baixa o modelo Qwen3 1.7B quantizado para o volume persistente `llm_models`. Esse download não se repete em reinicializações normais. O portal e o resumo extrativo abrem enquanto a fila aguarda o teste de saúde do modelo ficar pronto em segundo plano. Para acompanhar:
 
 ```bash
-docker compose --env-file .env.free -f compose.free.yml logs -f llm
+docker compose --env-file .env.free -f compose.production.yml logs -f llm
 ```
 
 Somente a primeira inicialização de um banco vazio faz a importação nacional e o download de fotos. O PostgreSQL preserva essa base; reinícios e novos acessos não repetem o download. Antes de divulgar o endereço, aguarde essa carga inicial e abra:
@@ -77,16 +77,33 @@ https://SEU_SITE/api/v1/health
 
 O campo `status` deve chegar a `OK`, e `candidateCount` e `photoCount` devem ser maiores que zero. Em `localPlanAnalysis`, confirme `enabled: true`; o modo pode aparecer como `WAITING_FOR_SERVER` no primeiro download e `lastSuccessAt` será preenchido depois da primeira análise concluída. O portal abre normalmente enquanto a fila trabalha.
 
-## 5. Atualizar e fazer backup
+## 5. Atualizar, monitorar e recuperar
 
 Para publicar uma nova versão:
 
 ```bash
 git pull --ff-only
-docker compose --env-file .env.free -f compose.free.yml up -d --build
+docker compose --env-file .env.free -f compose.production.yml up -d --build
 ```
 
-O volume `postgres_data` contém snapshots, fotos, análises de planos e contagens agregadas. O volume `llm_models` guarda o modelo, e o diretório `data-production` mantém os caches auxiliares. Faça backup periódico do banco e dos caches; o modelo pode ser baixado novamente. Para o banco, use `pg_dump`, que preserva a consistência sem precisar desligar o site.
+Use `compose.production.yml` no comando acima. O serviço `backup-worker` cria diariamente um `pg_dump` consistente e uma cópia compactada dos resumos prontos em `backups-production`, mantém 14 dias e valida o arquivo. A cada sete dias ele restaura integralmente o último backup em um banco temporário, confere a tabela principal e remove o banco de teste. O resultado fica em `backups-production/latest-restore-test.ok`.
+
+Para executar uma cópia ou uma restauração de teste imediatamente:
+
+```bash
+docker compose --env-file .env.free -f compose.production.yml exec backup-worker /opt/votoclaro/backup-now.sh
+docker compose --env-file .env.free -f compose.production.yml exec backup-worker /opt/votoclaro/restore-test.sh
+```
+
+O `monitor-worker` consulta a saúde a cada cinco minutos, alerta com 80% de disco usado, considera o backup vencido após 30 horas e grava o último estado em seu volume. Acompanhe com:
+
+```bash
+docker compose --env-file .env.free -f compose.production.yml logs --tail=50 monitor-worker backup-worker
+```
+
+O diretório `backups-production` fica fora dos contêineres para facilitar cópia para outro local. Configure também uma cópia diária para OCI Object Storage ou outra máquina: um backup no mesmo disco não protege contra perda total da VM.
+
+No painel da Oracle, crie um HTTP Health Check para `https://SEU_DOMINIO/api/v1/health`, com intervalo superior a 10 segundos, e alarmes para indisponibilidade. Habilite também o plugin de monitoramento da instância e alarmes de CPU, memória e disco.
 
 ## Limites e próximos passos
 

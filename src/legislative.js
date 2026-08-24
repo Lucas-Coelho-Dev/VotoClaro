@@ -402,7 +402,7 @@ class LegislativeService {
   }
 
   async attachExplanations(candidate, data, priority) {
-    if (!data?.laws?.length || !this.localLlmClient?.isEnabled()) return data;
+    if (!data?.laws?.length || (!this.localLlmClient?.isEnabled() && !this.config.aiWorkerAvailable)) return data;
     const laws = [];
     for (const item of data.laws) {
       const itemKey = legislativeItemKey(candidate, item);
@@ -421,12 +421,13 @@ class LegislativeService {
         plainLanguage: {
           status,
           local: true,
+          mode: this.localLlmClient?.isEnabled() ? 'LOCAL_SERVER' : 'DEDICATED_WORKER',
           attempts,
           analysisVersion: LEGISLATIVE_LLM_ANALYSIS_VERSION,
           updatedAt: stored?.updatedAt || null,
         },
       });
-      if (attempts < 3) this.queueExplanation(candidate, item, itemKey, priority);
+      if (attempts < 3 && this.localLlmClient?.isEnabled()) this.queueExplanation(candidate, item, itemKey, priority);
     }
     return { ...data, laws };
   }
@@ -528,7 +529,8 @@ class LegislativeService {
 
   getStatus() {
     return {
-      enabled: Boolean(this.localLlmClient?.isEnabled()),
+      enabled: Boolean(this.localLlmClient?.isEnabled() || this.config.aiWorkerAvailable),
+      mode: this.localLlmClient?.isEnabled() ? 'LOCAL_SERVER' : (this.config.aiWorkerAvailable ? 'DEDICATED_WORKER' : 'DISABLED'),
       queuedItems: this.analysisQueue.length,
       workerRunning: this.analysisWorkerRunning,
       precomputeRunning: this.precomputeRunning,
