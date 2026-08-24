@@ -503,8 +503,6 @@ function handleCandidateAction(event) {
   if (compare) return toggleComparison(compare.dataset.compareCandidate);
   const colinha = event.target.closest('[data-colinha-candidate]');
   if (colinha) return addToColinhaById(colinha.dataset.colinhaCandidate);
-  const legislative = event.target.closest('[data-load-legislative]');
-  if (legislative) return loadLegislative(legislative.dataset.loadLegislative);
   const governmentPlan = event.target.closest('[data-load-government-plan]');
   if (governmentPlan) return loadGovernmentPlan(governmentPlan.dataset.loadGovernmentPlan);
 }
@@ -563,13 +561,17 @@ async function registerCandidateView(id) {
 }
 
 function renderCandidateDetail(candidate, snapshot) {
+  const spendingLimit = candidate.maximumCampaignExpense
+    ? fact('Limite oficial de gastos', formatCurrency(candidate.maximumCampaignExpense))
+    : '';
   const finance = candidate.finance
     ? `<div class="fact-grid">
+        ${spendingLimit}
         <div class="fact"><span>Receitas publicadas</span><strong>${formatCurrency(candidate.finance.totalRevenue)}</strong></div>
         <div class="fact"><span>Despesas publicadas</span><strong>${formatCurrency(candidate.finance.totalExpense)}</strong></div>
         <div class="fact"><span>Saldo calculado</span><strong>${formatCurrency(candidate.finance.balance)}</strong></div>
       </div><p class="muted">${escapeHtml(candidate.finance.note)}</p>`
-    : '<div class="not-published">Dados financeiros ainda não publicados na fonte oficial importada. O VotoClaro não faz estimativas.</div>';
+    : `${spendingLimit ? `<div class="fact-grid">${spendingLimit}</div>` : ''}<div class="not-published"><strong>Receitas e despesas ainda não publicadas.</strong><br>Os arquivos consolidados de prestação de contas de 2026 ainda não constam na fonte oficial importada. O limite acima é oficial; o VotoClaro não estima arrecadação nem gastos.</div>`;
   const assets = candidate.assets.length
     ? `<div class="table-scroll" role="region" aria-label="Bens declarados" tabindex="0"><table class="asset-table"><thead><tr><th>Bem declarado</th><th>Tipo</th><th>Valor</th></tr></thead><tbody>${candidate.assets.map((asset) => `<tr><td>${escapeHtml(asset.description || 'Descrição não informada')}</td><td>${escapeHtml(asset.type || 'Não informado')}</td><td>${formatCurrency(asset.value)}</td></tr>`).join('')}</tbody><tfoot><tr><th colspan="2">Total declarado</th><th>${formatCurrency(candidate.assetTotal)}</th></tr></tfoot></table></div>`
     : '<div class="not-published">Nenhum bem consta no arquivo oficial importado. Isso pode significar ausência de declaração ou publicação ainda não processada.</div>';
@@ -577,9 +579,12 @@ function renderCandidateDetail(candidate, snapshot) {
     ? `<div class="source-list">${candidate.socialLinks.map((item) => `<a class="source-item" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(socialDomain(item.url))}</strong><span>Abrir endereço declarado ↗</span></a>`).join('')}</div>`
     : '<div class="not-published">Nenhuma rede social foi publicada no arquivo oficial importado.</div>';
   const sources = candidate.sources.map((source) => `<div class="source-item"><div><strong>${escapeHtml(source.name)}</strong><span>${escapeHtml(source.authority)} · ${formatDate(source.generatedAt)}</span></div><a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">Ver fonte ↗</a></div>`).join('');
-  const legislative = candidate.legislative
-    ? `<section class="detail-section"><h3>Mandato parlamentar atual</h3><div class="not-published"><strong>Correspondência entre fontes oficiais encontrada.</strong><br>${escapeHtml(candidate.legislative.matchMethod)}<br><a class="inline-link" href="${escapeHtml(candidate.legislative.profileUrl)}" target="_blank" rel="noopener noreferrer">Abrir perfil oficial ↗</a><br><button class="secondary-button" type="button" data-load-legislative="${escapeHtml(candidate.id)}">Ver até 5 projetos recentes</button></div><div id="legislativeData"></div></section>`
-    : `<section class="detail-section"><h3>Mandato parlamentar atual</h3><div class="not-published">Não encontramos correspondência exata por nome de urna, UF e partido nas listas atuais da Câmara ou do Senado. Não fazemos associação aproximada.</div></section>`;
+  const registrationStatus = [candidate.status, candidate.statusDetail]
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(' — ');
+  const electoralAlliance = [candidate.coalition, candidate.federation]
+    .filter(Boolean)
+    .join(' · ');
   const planEligible = ['GOVERNADOR', 'PRESIDENTE'].includes(String(candidate.office || '').toUpperCase());
   const governmentPlan = planEligible
     ? `<section class="detail-section"><h3>Propostas para o mandato</h3><div id="governmentPlanData"><div class="not-published"><strong>Documento entregue ao TSE.</strong><br>O vínculo usa o identificador oficial desta candidatura.<br><button class="secondary-button" type="button" data-load-government-plan="${escapeHtml(candidate.id)}">Ver resumo e plano oficial</button></div></div></section>`
@@ -598,19 +603,17 @@ function renderCandidateDetail(candidate, snapshot) {
     <div class="detail-body">
       <div class="provenance-banner"><span>✓ Dados reproduzidos da publicação oficial do TSE</span><span>Importado em ${formatDate(snapshot.importedAt)}</span></div>
       <div class="detail-actions"><button class="primary-button" type="button" data-colinha-candidate="${escapeHtml(candidate.id)}">Adicionar à colinha</button><button class="secondary-button" type="button" data-compare-candidate="${escapeHtml(candidate.id)}">Comparar</button></div>
-      <section class="detail-section"><h3>Registro da candidatura</h3><div class="fact-grid">
-        ${fact('Cargo', candidate.office)}${fact('Situação publicada', candidate.status)}${fact('Detalhe da situação', candidate.statusDetail)}
-        ${fact('Partido', [candidate.party, candidate.partyName].filter(Boolean).join(' — '))}${fact('Faixa ideológica do partido', partyIdeologyLabel(candidate, true))}${fact('UF / unidade eleitoral', [candidate.uf, candidate.electionUnitName].filter(Boolean).join(' — '))}${fact('Reeleição declarada', candidate.reelection ? 'Sim' : 'Não')}
-        ${fact('Ocupação', candidate.occupation)}${fact('Escolaridade', candidate.education)}${fact('Idade na posse', candidate.ageAtTakingOffice ? `${candidate.ageAtTakingOffice} anos` : '')}
-        ${fact('Julgamento', candidate.judgmentStatus)}${fact('Processo de registro', candidate.registrationProcess)}${fact('Aceite da candidatura', candidate.acceptedAt)}
-        ${fact('Coligação', candidate.coalition)}${fact('Federação', candidate.federation)}${fact('Código TSE', candidate.tseId)}
-        ${fact('Limite oficial de gastos', candidate.maximumCampaignExpense ? formatCurrency(candidate.maximumCampaignExpense) : '')}${fact('Declarou bens', candidate.declaredAssets ? 'Sim' : 'Não informado/Não')}${fact('Inserida na urna', candidate.insertedInBallot ? 'Sim' : 'Ainda não')}
+      <section class="detail-section"><h3>Informações principais</h3><div class="fact-grid">
+        ${fact('Cargo', candidate.office)}${fact('Situação do registro', registrationStatus)}
+        ${fact('Partido', [candidate.party, candidate.partyName].filter(Boolean).join(' — '))}${fact('UF / unidade eleitoral', [candidate.uf, candidate.electionUnitName].filter(Boolean).join(' — '))}
+        ${optionalFact('Aliança eleitoral', electoralAlliance)}${fact('Inserida na urna', candidate.insertedInBallot ? 'Sim' : 'Ainda não')}
+        ${fact('Reeleição declarada', candidate.reelection ? 'Sim' : 'Não')}${optionalFact('Idade na posse', candidate.ageAtTakingOffice ? `${candidate.ageAtTakingOffice} anos` : '')}
+        ${optionalFact('Ocupação', candidate.occupation)}${optionalFact('Escolaridade', candidate.education)}${fact('Faixa ideológica do partido', partyIdeologyLabel(candidate, true))}
       </div><p class="method-note ideology-method-note">A faixa ideológica se refere ao partido na pesquisa acadêmica, não à posição individual da pessoa candidata. <a href="/methodology.html#ideologia-partidaria">Ver fonte, limites e ressalvas</a>.</p></section>
       ${ticket}
       <section class="detail-section"><h3>Bens declarados</h3>${assets}</section>
       <section class="detail-section"><h3>Financiamento da campanha</h3>${finance}</section>
       ${governmentPlan}
-      ${legislative}
       <section class="detail-section"><h3>Fiscalização, dinheiro público e integridade</h3><div id="integrityData"><div class="mini-loading">Consultando TCU, TSE e fontes oficiais de transparência…</div></div></section>
       <section class="detail-section"><h3>Redes sociais declaradas</h3>${social}</section>
       <section class="detail-section"><h3>Proveniência</h3><div class="source-list">${sources}</div><p class="muted">Checksum da importação: ${escapeHtml(snapshot.checksum)}</p></section>
@@ -690,11 +693,10 @@ function renderIntegrityMoney(data) {
     ? `${fact('Receitas de campanha', formatCurrency(campaign.totalRevenue))}${fact('Despesas de campanha', formatCurrency(campaign.totalExpense))}${fact('Lançamentos publicados', formatNumber(Number(campaign.revenueRecords || 0) + Number(campaign.expenseRecords || 0)))}`
     : `${fact('Receitas de campanha', 'Ainda não publicadas')}${fact('Despesas de campanha', 'Ainda não publicadas')}`;
   const assetFacts = `${fact('Bens declarados', assets.status === 'PUBLISHED' ? formatCurrency(assets.total) : 'Nenhum no arquivo atual')}${fact('Itens de bens publicados', formatNumber(assets.count))}`;
-  let legislativeFact = fact('Despesas do mandato atual', 'Sem mandato atual verificado');
-  if (legislative.status === 'PUBLISHED') legislativeFact = fact(`Despesas parlamentares ${legislative.year || ''}`.trim(), `${formatCurrency(legislative.totalShown)}${legislative.partial ? ' — recorte parcial' : ''}`);
-  else if (legislative.status === 'UNAVAILABLE') legislativeFact = fact('Despesas do mandato atual', 'Fonte indisponível agora');
-  else if (legislative.status === 'NOT_PUBLISHED_IN_QUERY') legislativeFact = fact('Despesas do mandato atual', 'Não publicadas nesta consulta');
-  return `<section class="integrity-group"><div class="integrity-group-heading"><div><span>VALORES PUBLICADOS</span><h4>Dinheiro e patrimônio declarados</h4></div><small>TSE e Casa legislativa</small></div><div class="fact-grid integrity-money-grid">${campaignFacts}${assetFacts}${legislativeFact}</div><p class="integrity-source-note">${escapeHtml(campaign.message || '')} ${escapeHtml(assets.message || '')} ${escapeHtml(legislative.message || '')}</p></section>`;
+  const legislativeFact = legislative.status === 'PUBLISHED'
+    ? fact(`Despesas parlamentares ${legislative.year || ''}`.trim(), `${formatCurrency(legislative.totalShown)}${legislative.partial ? ' — recorte parcial' : ''}`)
+    : '';
+  return `<section class="integrity-group"><div class="integrity-group-heading"><div><span>VALORES PUBLICADOS</span><h4>Dinheiro e patrimônio declarados</h4></div><small>${legislativeFact ? 'TSE e Casa legislativa' : 'TSE'}</small></div><div class="fact-grid integrity-money-grid">${campaignFacts}${assetFacts}${legislativeFact}</div><p class="integrity-source-note">${escapeHtml(campaign.message || '')} ${escapeHtml(assets.message || '')}${legislativeFact ? ` ${escapeHtml(legislative.message || '')}` : ''}</p></section>`;
 }
 
 function renderIntegrityData(data, compact = false) {
@@ -704,18 +706,6 @@ function renderIntegrityData(data, compact = false) {
   }
   const methodology = compact ? '' : `<div class="integrity-methodology"><strong>Como interpretar</strong><p>${escapeHtml(data.methodology?.legalStage || '')}</p><p>${escapeHtml(data.methodology?.absence || '')}</p><p>${escapeHtml(data.methodology?.privacy || '')}</p></div>`;
   return `<div class="integrity-check"><div class="integrity-alert"><div><span>LEITURA RESPONSÁVEL</span><strong>${escapeHtml(data.summary?.label || 'Consulta oficial concluída')}</strong></div><p>${escapeHtml(data.summary?.warning || 'Cada registro é mostrado com sua situação e fonte; não há nota automática.')}</p></div>${renderIntegrityRegistry('Decisões e impedimentos do TCU', data.publicAccounts, renderTcuRecord)}${renderIntegrityRegistry('Sanções administrativas federais', data.sanctions, renderSanctionRecord)}${renderIntegrityMoney(data)}${methodology}<p class="muted">Consulta realizada em ${formatDate(data.checkedAt)}.</p></div>`;
-}
-
-async function loadLegislative(id) {
-  const container = byId('legislativeData');
-  if (!container) return;
-  container.innerHTML = '<div class="mini-loading">Consultando a Casa legislativa…</div>';
-  try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative`);
-    container.innerHTML = renderLegislativeContent(payload.data, true);
-  } catch (error) {
-    container.innerHTML = `<div class="not-published">A API legislativa não respondeu agora. Nenhum valor substituto foi exibido.</div>`;
-  }
 }
 
 function proposalCard(proposal) {
@@ -853,6 +843,9 @@ function renderGovernmentPlan(plan, candidateId, summary = null) {
 
 function fact(label, value) {
   return `<div class="fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value || 'Não publicado')}</strong></div>`;
+}
+function optionalFact(label, value) {
+  return value ? fact(label, value) : '';
 }
 function socialDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return 'Rede social declarada'; }
