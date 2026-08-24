@@ -4,6 +4,7 @@ const {
   chunksFromPages,
   chunksFromEvidenceSummary,
   createLocalLlmSummary,
+  buildGeneralObjective,
   completeGeneratedSentence,
   normalizedEvidenceText,
   validatedEvidences,
@@ -117,7 +118,7 @@ test('não publica explicação da IA em tema diferente daquele sustentado pelo 
   const education = summary.themeSummaries.find((theme) => theme.id === 'educacao');
   assert.equal(management.digest, null);
   assert.equal(education.proposalCount, 1);
-  assert.equal(summary.candidateObjective.summary, 'O plano pretende ampliar o atendimento educacional.');
+  assert.equal(summary.candidateObjective, null);
 });
 
 test('consolida propostas por tema, valida evidências e mantém impacto condicional', async () => {
@@ -172,7 +173,8 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
   });
   assert.equal(summary.summaryType, 'AUTOMATIC_THEMATIC_LOCAL_LLM');
   assert.equal(summary.aiAnalysis.status, 'READY');
-  assert.match(summary.candidateObjective.summary, /serviços públicos de educação e saúde/i);
+  assert.match(summary.candidateObjective.summary, /2 temas: educação e saúde/i);
+  assert.deepEqual(summary.candidateObjective.priorities.map((item) => item.id), ['educacao', 'saude']);
   assert.equal(summary.candidateObjective.evidences[0].page, 4);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'educacao').proposalCount, 1);
   assert.equal(summary.themeSummaries.find((theme) => theme.id === 'saude').proposalCount, 1);
@@ -181,6 +183,23 @@ test('consolida propostas por tema, valida evidências e mantém impacto condici
   assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.potentialImpact, /rotina das famílias/i);
   assert.match(summary.themeSummaries.find((theme) => theme.id === 'educacao').digest.conditionsAndLimits, /quanto custaria/i);
   assert.match(summary.notice, /hipótese causal condicionada.+não é previsão, garantia/i);
+});
+
+test('visão geral percorre todos os nove temas antes das análises separadas', () => {
+  const themeSummaries = THEMES.map((theme, index) => ({
+    ...theme,
+    status: 'FOUND',
+    digest: {
+      summary: `Prioridade principal de ${theme.label} com mudança prevista no serviço público. Detalhes adicionais.`,
+      evidences: [{ page: index + 2, quote: `Trecho oficial sobre ${theme.label}.` }],
+    },
+  }));
+  const objective = buildGeneralObjective(themeSummaries);
+  assert.equal(objective.priorities.length, 9);
+  assert.equal(objective.evidences.length, 9);
+  assert.deepEqual(objective.pages, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.match(objective.summary, /9 temas/i);
+  THEMES.forEach((theme) => assert.match(objective.summary, new RegExp(theme.label.split(',')[0], 'i')));
 });
 
 test('explica o caminho social e as lacunas sem repetir a proposta de cultura', async () => {

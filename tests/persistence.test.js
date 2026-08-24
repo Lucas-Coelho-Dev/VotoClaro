@@ -66,3 +66,53 @@ test('usa o cache local de foto quando o PostgreSQL ainda não possui a imagem',
   assert.equal(photo.contentType, 'image/jpeg');
   assert.deepEqual([...await store.availablePhotoIds([candidateId])], [candidateId]);
 });
+
+test('registra relato de análise e permite acompanhar sem publicar o texto enviado', async (t) => {
+  const { store, config } = await temporaryStore(t);
+  await store.createAnalysisReport({
+    trackingCode: 'VC-1234ABCDEF56',
+    candidateId: '280002542548',
+    subjectType: 'GOVERNMENT_PLAN',
+    subjectKey: 'educacao',
+    category: 'WRONG_PAGE',
+    pageNumber: 12,
+    details: 'O trecho indicado aparece em outra página do documento oficial.',
+    analysisVersion: 'local-llm-v16',
+    createdAt: '2026-08-24T12:00:00.000Z',
+  });
+
+  const publicReport = await store.getAnalysisReport('VC-1234ABCDEF56');
+  assert.equal(publicReport.status, 'OPEN');
+  assert.equal(publicReport.category, 'WRONG_PAGE');
+  assert.equal('details' in publicReport, false);
+  assert.equal('subjectKey' in publicReport, false);
+  assert.deepEqual((await store.getAiAuditStats()).correctionReports, [{ status: 'OPEN', count: 1 }]);
+
+  const updated = await store.updateAnalysisReport('VC-1234ABCDEF56', {
+    status: 'RESOLVED',
+    resolutionNote: 'Página corrigida após conferência do PDF oficial.',
+  });
+  assert.equal(updated.status, 'RESOLVED');
+  assert.match(updated.resolutionNote, /Página corrigida/);
+
+  const restarted = new SnapshotStore(config);
+  await restarted.initialize();
+  assert.equal((await restarted.getAnalysisReport('VC-1234ABCDEF56')).status, 'RESOLVED');
+});
+
+test('publica alerta operacional sem alterar a data da última versão oficial', async (t) => {
+  const { store } = await temporaryStore(t);
+  const importedAt = '2026-08-18T11:17:22.218Z';
+  await store.saveSnapshot({
+    meta: { checksum: 'snapshot-1', importedAt, sourceGeneratedAt: importedAt, candidateCount: 1 },
+    sourceStatuses: {},
+    candidates: [{ id: '1' }],
+  });
+  await store.updateSourceStatuses({
+    'tse-candidates-2026': { state: 'ERROR', alert: true, consecutiveFailures: 1 },
+  }, '2026-08-24T15:00:00.000Z');
+
+  assert.equal(store.getSnapshot().meta.importedAt, importedAt);
+  assert.equal(store.getSnapshot().meta.lastSyncAttemptAt, '2026-08-24T15:00:00.000Z');
+  assert.equal(store.getSnapshot().sourceStatuses['tse-candidates-2026'].alert, true);
+});

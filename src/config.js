@@ -34,10 +34,12 @@ module.exports = Object.freeze({
   // SYNC_ON_START faz apenas a carga inicial de um armazenamento vazio.
   // Se já existe uma base persistida, o servidor a utiliza imediatamente.
   syncOnStart: booleanFromEnv('SYNC_ON_START', true),
+  syncSchedulerEnabled: booleanFromEnv('SYNC_SCHEDULER_ENABLED', true),
   syncPhotos: booleanFromEnv('SYNC_PHOTOS', true),
   photoSyncConcurrency: integerFromEnv('PHOTO_SYNC_CONCURRENCY', 3, 1),
   maxCandidatePhotoBytes: integerFromEnv('MAX_CANDIDATE_PHOTO_BYTES', 5 * 1024 * 1024, 32 * 1024),
   syncIntervalMinutes: integerFromEnv('SYNC_INTERVAL_MINUTES', 360, 15),
+  snapshotRefreshSeconds: integerFromEnv('SNAPSHOT_REFRESH_SECONDS', 30, 5),
   requestTimeoutMs: integerFromEnv('SOURCE_TIMEOUT_MS', 120000, 5000),
   maxDownloadBytes: integerFromEnv('MAX_DOWNLOAD_BYTES', 250 * 1024 * 1024, 1024 * 1024),
   snapshotRetention: integerFromEnv('SNAPSHOT_RETENTION', 10, 2),
@@ -63,4 +65,5 @@ module.exports = Object.freeze({
   localLlmPrecomputeOnStart: booleanFromEnv('BACKGROUND_ANALYSIS_ENABLED', true),
   localLlmPrecomputeLimit: integerFromEnv('LOCAL_LLM_PRECOMPUTE_LIMIT', 500, 1),
   localLlmLegislativePrecomputeLimit: integerFromEnv('LOCAL_LLM_LEGISLATIVE_PRECOMPUTE_LIMIT', 500, 1),
+  aiWorkerIntervalMinutes: integerFromEnv('AI_WORKER_INTERVAL_MINUTES', 30, 5),
 });

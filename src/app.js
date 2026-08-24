@@ -19,6 +19,12 @@ const {
 const { publicSources } = require('./sources');
 const { searchable, isVoterFacingOffice, attachRunningMates } = require('./normalize');
 const { IDEOLOGY_SOURCE, IDEOLOGY_FILTERS, getPartyIdeology, partyMarkSvg } = require('./parties');
+const {
+  LOCAL_LLM_ANALYSIS_VERSION,
+  LOCAL_LLM_PROMPT_VERSION,
+  LEGISLATIVE_LLM_ANALYSIS_VERSION,
+  LEGISLATIVE_LLM_PROMPT_VERSION,
+} = require('./local-llm');
 
 const app = express();
 app.disable('x-powered-by');
@@ -152,6 +158,34 @@ const popularQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(12).optional().default(6),
 });
 
+const analysisReportSchema = z.object({
+  candidateId: z.string().regex(/^\d{8,20}$/),
+  subjectType: z.enum(['GOVERNMENT_PLAN', 'LEGISLATIVE_ITEM']),
+  subjectKey: z.string().trim().max(128).optional().default(''),
+  category: z.enum(['INCORRECT_EXCERPT', 'WRONG_PAGE', 'AUTHORSHIP', 'BIASED_LANGUAGE', 'OTHER']),
+  pageNumber: z.coerce.number().int().min(1).max(5000).optional(),
+  details: z.string().trim().min(20).max(1000),
+  analysisVersion: z.string().trim().max(80).optional().default(''),
+});
+
+const analysisReportUpdateSchema = z.object({
+  status: z.enum(['REVIEWING', 'RESOLVED', 'DISMISSED']),
+  resolutionNote: z.string().trim().min(10).max(1000),
+});
+
+function sourceAlerts(snapshot) {
+  return Object.entries(snapshot?.sourceStatuses || {})
+    .filter(([, status]) => status?.alert || status?.state === 'ERROR')
+    .map(([sourceId, status]) => ({
+      sourceId,
+      state: status.state || 'ERROR',
+      message: status.message || 'A fonte não respondeu na última tentativa.',
+      lastAttemptAt: status.lastAttemptAt || status.finishedAt || null,
+      lastSuccessAt: status.lastSuccessAt || null,
+      consecutiveFailures: Number(status.consecutiveFailures || 1),
+    }));
+}
+
 app.get('/api/v1/health', (request, response) => {
   const storedSnapshot = store.getSnapshot();
   const snapshot = storedSnapshot ? publicSnapshot(storedSnapshot) : null;
@@ -170,6 +204,7 @@ app.get('/api/v1/health', (request, response) => {
     photoCount: snapshot?.meta?.photoCount || 0,
     importedAt,
     sourceGeneratedAt: snapshot?.meta?.sourceGeneratedAt || null,
+    sourceAlerts: sourceAlerts(snapshot),
     ageHours: ageHours === null ? null : Number(ageHours.toFixed(2)),
     checksum: snapshot?.meta?.checksum || null,
     integrity: integrityService.getStatus(),
@@ -190,15 +225,114 @@ app.get('/api/v1/health', (request, response) => {
   });
 });
 
+const analysisReportRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    error: 'TOO_MANY_REPORTS',
+    message: 'Muitos relatos foram enviados em pouco tempo. Tente novamente mais tarde.',
+  },
+});
+
 app.get('/api/v1/sources', (request, response) => {
   const snapshot = store.getSnapshot();
   response.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
   response.json({
     dataPolicy: 'Dados oficiais são reproduzidos sem estimativas. Fontes secundárias nunca substituem a fonte oficial.',
     sources: publicSources(snapshot?.sourceStatuses || {}),
+    alerts: sourceAlerts(snapshot),
     syncRuns: store.getRuns(),
     snapshot: snapshot?.meta || null,
   });
+});
+
+app.get('/api/v1/ai/methodology', async (request, response, next) => {
+  try {
+    const statistics = await store.getAiAuditStats();
+    response.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=1800');
+    return response.json({
+      generatedAt: new Date().toISOString(),
+      model: config.localLlmModel,
+      analyses: {
+        governmentPlans: {
+          analysisVersion: LOCAL_LLM_ANALYSIS_VERSION,
+          promptVersion: LOCAL_LLM_PROMPT_VERSION,
+          documents: ['PDFs de propostas de governo publicados pelo TSE'],
+        },
+        legislativeItems: {
+          analysisVersion: LEGISLATIVE_LLM_ANALYSIS_VERSION,
+          promptVersion: LEGISLATIVE_LLM_PROMPT_VERSION,
+          documents: ['Ementas, situações e autorias oficiais da Câmara dos Deputados e do Senado Federal'],
+        },
+      },
+      validations: [
+        'Cada tema do plano é analisado isoladamente para reduzir mistura entre assuntos.',
+        'Toda evidência textual precisa existir na página indicada do PDF oficial.',
+        'Números que não aparecem nos documentos fornecidos à IA são rejeitados.',
+        'Autoria legislativa só é mostrada após correspondência exata com a fonte oficial.',
+        'Impactos são cenários condicionais e não previsões, garantias ou notas eleitorais.',
+      ],
+      limitations: [
+        'A IA pode simplificar demais, deixar de identificar uma proposta ou interpretar de forma incompleta.',
+        'O sistema não calcula custo, viabilidade, prioridade política nem chance de cumprimento.',
+        'PDFs digitalizados como imagem podem não oferecer texto extraível suficiente.',
+        'A conferência humana do documento original continua recomendada.',
+      ],
+      correctionHistory: [
+        { date: '2026-08-24', version: LOCAL_LLM_ANALYSIS_VERSION, change: 'Visão geral passou a reunir todos os temas identificados, sem usar Educação como resumo de todo o plano.' },
+        { date: '2026-08-24', version: LOCAL_LLM_ANALYSIS_VERSION, change: 'Campos temáticos passaram a preservar o estado aberto durante atualizações automáticas.' },
+        { date: '2026-08-24', version: LOCAL_LLM_ANALYSIS_VERSION, change: 'Explicações passaram a separar mudança, caminho até a sociedade e lacunas do documento.' },
+      ],
+      statistics,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/v1/reports', analysisReportRateLimit, async (request, response, next) => {
+  try {
+    const snapshot = snapshotOrUnavailable(response);
+    if (!snapshot) return;
+    const report = analysisReportSchema.parse(request.body);
+    if (!snapshot.candidates.some((candidate) => candidate.id === report.candidateId)) {
+      return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND', message: 'Candidatura não encontrada na publicação oficial atual.' });
+    }
+    const trackingCode = `VC-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+    const stored = await store.createAnalysisReport({
+      ...report,
+      trackingCode,
+      createdAt: new Date().toISOString(),
+    });
+    response.setHeader('Cache-Control', 'no-store');
+    return response.status(201).json({
+      data: {
+        trackingCode: stored.trackingCode,
+        status: stored.status,
+        createdAt: stored.createdAt,
+        statusUrl: `/report-status.html?code=${encodeURIComponent(stored.trackingCode)}`,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/v1/reports/:trackingCode', async (request, response, next) => {
+  try {
+    const trackingCode = String(request.params.trackingCode || '').trim().toUpperCase();
+    if (!/^VC-[A-F0-9]{12}$/.test(trackingCode)) {
+      return response.status(400).json({ error: 'INVALID_TRACKING_CODE', message: 'Protocolo inválido.' });
+    }
+    const report = await store.getAnalysisReport(trackingCode);
+    if (!report) return response.status(404).json({ error: 'REPORT_NOT_FOUND', message: 'Relato não encontrado.' });
+    response.setHeader('Cache-Control', 'no-store');
+    return response.json({ data: report });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get('/api/v1/filters', (request, response) => {
@@ -545,6 +679,24 @@ async function authenticatedSync(request, response, next) {
 }
 app.post('/api/v1/admin/sync', authenticatedSync);
 app.get('/api/v1/admin/sync', authenticatedSync);
+
+app.patch('/api/v1/admin/reports/:trackingCode', async (request, response, next) => {
+  try {
+    if (!config.syncSecret) return response.status(503).json({ error: 'ADMIN_NOT_CONFIGURED', message: 'Defina SYNC_SECRET.' });
+    const authorization = request.get('authorization') || '';
+    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+    if (!safeSecretMatch(token, config.syncSecret)) return response.status(401).json({ error: 'UNAUTHORIZED' });
+    const trackingCode = String(request.params.trackingCode || '').trim().toUpperCase();
+    if (!/^VC-[A-F0-9]{12}$/.test(trackingCode)) return response.status(400).json({ error: 'INVALID_TRACKING_CODE' });
+    const update = analysisReportUpdateSchema.parse(request.body);
+    const report = await store.updateAnalysisReport(trackingCode, update);
+    if (!report) return response.status(404).json({ error: 'REPORT_NOT_FOUND' });
+    response.setHeader('Cache-Control', 'no-store');
+    return response.json({ data: report });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 app.get('/api/candidates', (request, response) => response.status(410).json({
   error: 'LEGACY_API_REMOVED',

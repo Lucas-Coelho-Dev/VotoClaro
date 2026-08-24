@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const { SOURCES } = require('./sources');
+const { downloadByRanges } = require('./ranged-download');
 
 const VALID_UNITS = new Set(['BR', 'AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO']);
 const ARCHIVE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -38,10 +39,20 @@ async function downloadArchive(unit, config) {
       signal: controller.signal,
       headers: { Accept: 'application/zip, application/octet-stream', 'User-Agent': 'VotoClaro/2.0 (dados-publicos)' },
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status} no arquivo de propostas do TSE.`);
-    const announcedSize = Number(response.headers.get('content-length') || 0);
-    if (announcedSize > MAX_ARCHIVE_BYTES) throw new Error('O arquivo de propostas excedeu o limite de segurança.');
-    const buffer = Buffer.from(await response.arrayBuffer());
+    let buffer;
+    if (response.status === 403) {
+      await response.arrayBuffer();
+      buffer = await downloadByRanges(url, {
+        signal: controller.signal,
+        headers: { Accept: 'application/zip, application/octet-stream', 'User-Agent': 'VotoClaro/2.0 (dados-publicos)' },
+        maxBytes: MAX_ARCHIVE_BYTES,
+      });
+    } else {
+      if (!response.ok) throw new Error(`HTTP ${response.status} no arquivo de propostas do TSE.`);
+      const announcedSize = Number(response.headers.get('content-length') || 0);
+      if (announcedSize > MAX_ARCHIVE_BYTES) throw new Error('O arquivo de propostas excedeu o limite de segurança.');
+      buffer = Buffer.from(await response.arrayBuffer());
+    }
     if (buffer.length > MAX_ARCHIVE_BYTES || buffer.subarray(0, 2).toString('ascii') !== 'PK') {
       throw new Error('O arquivo de propostas recebido do TSE é inválido ou excede o limite.');
     }

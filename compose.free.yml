@@ -66,6 +66,9 @@ services:
       LOCAL_LLM_ENABLED: "true"
       LOCAL_LLM_BASE_URL: http://llm:8080/v1
       LOCAL_LLM_MODEL: qwen3-1.7b-local
+      SYNC_ON_START: "false"
+      SYNC_SCHEDULER_ENABLED: "false"
+      BACKGROUND_ANALYSIS_ENABLED: "false"
     volumes:
       - ./data-production:/data
     depends_on:
@@ -79,6 +82,57 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+
+  sync-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "scripts/run-sync-worker.js"]
+    restart: unless-stopped
+    env_file:
+      - .env.free
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://votoclaro:${POSTGRES_PASSWORD}@db:5432/votoclaro
+      DATABASE_SSL: "false"
+      DATA_DIR: /data
+      PHOTO_DIR: /data/photos
+      SYNC_ON_START: "false"
+      SYNC_SCHEDULER_ENABLED: "false"
+      LOCAL_LLM_ENABLED: "false"
+    volumes:
+      - ./data-production:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ai-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "scripts/run-ai-worker.js"]
+    restart: unless-stopped
+    env_file:
+      - .env.free
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://votoclaro:${POSTGRES_PASSWORD}@db:5432/votoclaro
+      DATABASE_SSL: "false"
+      DATA_DIR: /data
+      PHOTO_DIR: /data/photos
+      SYNC_ON_START: "false"
+      SYNC_SCHEDULER_ENABLED: "false"
+      LOCAL_LLM_ENABLED: "true"
+      LOCAL_LLM_BASE_URL: http://llm:8080/v1
+      LOCAL_LLM_MODEL: qwen3-1.7b-local
+      BACKGROUND_ANALYSIS_ENABLED: "true"
+    volumes:
+      - ./data-production:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      llm:
+        condition: service_started
 
   caddy:
     image: caddy:2-alpine

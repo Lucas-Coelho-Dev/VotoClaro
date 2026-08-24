@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const { SOURCES } = require('./sources');
+const { downloadByRanges } = require('./ranged-download');
 
 const PHOTO_UNITS = Object.freeze([
   'AC', 'AL', 'AM', 'AP', 'BA', 'BR', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT',
@@ -76,11 +77,22 @@ class CandidatePhotoSync {
     const candidateIds = candidates.map((candidate) => candidate.id);
     const existingBefore = await this.store.availablePhotoIds(candidateIds);
     const units = PHOTO_UNITS.filter((unit) => idsByUnit.has(unit));
-    const unitResults = await mapWithConcurrency(
+    let unitResults = await mapWithConcurrency(
       units,
       this.config.photoSyncConcurrency,
       async (unit) => this.synchronizeUnit(unit, idsByUnit.get(unit), existingBefore),
     );
+
+    const retryUnits = unitResults.filter((result) => result.status === 'FAILED').map((result) => result.unit);
+    if (retryUnits.length) {
+      const retries = await mapWithConcurrency(
+        retryUnits,
+        1,
+        async (unit) => this.synchronizeUnit(unit, idsByUnit.get(unit), existingBefore),
+      );
+      const retryByUnit = new Map(retries.map((result) => [result.unit, result]));
+      unitResults = unitResults.map((result) => retryByUnit.get(result.unit) || result);
+    }
 
     const failures = unitResults.filter((result) => result.status === 'FAILED');
     const available = await this.hydrate(candidates);
@@ -134,10 +146,20 @@ class CandidatePhotoSync {
         });
         return { unit, status: 'NOT_MODIFIED', records: previousState.recordCount || existingForUnit };
       }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const declaredSize = Number.parseInt(response.headers.get('content-length') || '0', 10);
-      if (declaredSize > this.config.maxDownloadBytes) throw new Error('Arquivo de fotos excede o limite configurado.');
-      const archiveBuffer = Buffer.from(await response.arrayBuffer());
+      let archiveBuffer;
+      if (response.status === 403) {
+        await response.arrayBuffer();
+        archiveBuffer = await downloadByRanges(sourceUrl, {
+          signal: controller.signal,
+          headers,
+          maxBytes: this.config.maxDownloadBytes,
+        });
+      } else {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const declaredSize = Number.parseInt(response.headers.get('content-length') || '0', 10);
+        if (declaredSize > this.config.maxDownloadBytes) throw new Error('Arquivo de fotos excede o limite configurado.');
+        archiveBuffer = Buffer.from(await response.arrayBuffer());
+      }
       if (archiveBuffer.length > this.config.maxDownloadBytes) throw new Error('Arquivo de fotos excede o limite configurado.');
 
       const sourceUpdatedAt = (() => {

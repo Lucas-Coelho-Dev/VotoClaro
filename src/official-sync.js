@@ -14,6 +14,7 @@ const {
   isVoterFacingOffice,
 } = require('./normalize');
 const { enrichCandidatesWithLegislativeLinks } = require('./legislative');
+const { downloadByRanges } = require('./ranged-download');
 
 class OfficialDataSync {
   constructor(config, store, photoSynchronizer, identityVault = null) {
@@ -39,6 +40,8 @@ class OfficialDataSync {
   async run(trigger) {
     const startedAt = new Date().toISOString();
     const statuses = {};
+    const previous = this.store.getSnapshot();
+    const previousStatuses = previous?.sourceStatuses || {};
     try {
       const resourceEntries = [
         ['candidates', SOURCES.tseCandidates],
@@ -53,29 +56,39 @@ class OfficialDataSync {
         const sourceStartedAt = new Date().toISOString();
         try {
           const records = await this.downloadZipRecords(source.resourceUrl);
+          const finishedAt = new Date().toISOString();
           statuses[source.id] = {
             state: 'OK',
-            lastSuccessAt: new Date().toISOString(),
+            lastAttemptAt: finishedAt,
+            lastSuccessAt: finishedAt,
             records: records.length,
+            consecutiveFailures: 0,
+            alert: false,
             message: `${records.length.toLocaleString('pt-BR')} registros recebidos.`,
           };
           await this.store.recordRun({
             sourceId: source.id,
             status: 'SUCCESS',
             startedAt: sourceStartedAt,
-            finishedAt: new Date().toISOString(),
+            finishedAt,
             recordCount: records.length,
           });
           return [key, records];
         } catch (error) {
+          const lastStatus = previousStatuses[source.id] || {};
+          const consecutiveFailures = Number(lastStatus.consecutiveFailures || 0) + 1;
           statuses[source.id] = {
             state: source.optional ? 'UNAVAILABLE' : 'ERROR',
             lastAttemptAt: new Date().toISOString(),
+            lastSuccessAt: lastStatus.lastSuccessAt || null,
+            consecutiveFailures,
+            alert: true,
             message: source.optional
-              ? 'O arquivo ainda não está disponível ou a fonte recusou a consulta.'
+              ? 'A fonte não respondeu nesta tentativa. A última versão válida deste conjunto foi preservada quando disponível.'
               : 'Falha ao consultar a fonte oficial.',
             error: error.message,
           };
+          console.error(`[ALERTA DE FONTE] ${source.id} falhou pela ${consecutiveFailures}ª vez consecutiva: ${error.message}`);
           await this.store.recordRun({
             sourceId: source.id,
             status: source.optional ? 'UNAVAILABLE' : 'FAILED',
@@ -83,12 +96,14 @@ class OfficialDataSync {
             finishedAt: new Date().toISOString(),
             error: error.message,
           });
-          if (!source.optional) throw error;
-          return [key, []];
+          return [key, null];
         }
       }));
 
       const datasets = Object.fromEntries(results);
+      if (!datasets.candidates) {
+        throw new Error(statuses[SOURCES.tseCandidates.id]?.error || 'A fonte principal de candidaturas não respondeu.');
+      }
       const candidateRows = datasets.candidates || [];
       // O CPF publicado no pacote do TSE é usado somente para vínculos exatos com
       // cadastros oficiais. Ele permanece na memória e nunca entra no snapshot público.
@@ -110,12 +125,85 @@ class OfficialDataSync {
           item,
         ]),
       ).values()];
-      attachCandidateComplement(candidates, datasets.candidateComplement || []);
-      attachRelatedData(candidates, assets, social, datasets.revenues || [], datasets.expenses || []);
+      const previousById = new Map((previous?.candidates || []).map((candidate) => [candidate.id, candidate]));
+      if (datasets.candidateComplement) {
+        attachCandidateComplement(candidates, datasets.candidateComplement);
+      } else {
+        const complementFields = [
+          'judgmentStatus', 'electionStatus', 'ballotStatus', 'registrationProcess', 'acceptedAt',
+          'maximumCampaignExpense', 'declaredAssets', 'insertedInBallot', 'replaced',
+          'nationality', 'birthplace',
+        ];
+        for (const candidate of candidates) {
+          const old = previousById.get(candidate.id);
+          if (!old) continue;
+          for (const field of complementFields) {
+            if (old[field] !== undefined) candidate[field] = old[field];
+          }
+        }
+      }
+      attachRelatedData(
+        candidates,
+        datasets.assets ? assets : [],
+        datasets.social ? social : [],
+        datasets.revenues || [],
+        datasets.expenses || [],
+      );
+      for (const candidate of candidates) {
+        const old = previousById.get(candidate.id);
+        if (!old) continue;
+        if (!datasets.assets) {
+          candidate.assets = old.assets || [];
+          candidate.assetTotal = Number(old.assetTotal) || 0;
+        }
+        if (!datasets.social) candidate.socialLinks = old.socialLinks || [];
+        if (!datasets.revenues || !datasets.expenses) {
+          const currentFinance = candidate.finance || {};
+          const oldFinance = old.finance || {};
+          const totalRevenue = datasets.revenues
+            ? Number(currentFinance.totalRevenue || 0)
+            : Number(oldFinance.totalRevenue || 0);
+          const totalExpense = datasets.expenses
+            ? Number(currentFinance.totalExpense || 0)
+            : Number(oldFinance.totalExpense || 0);
+          const revenueRecords = datasets.revenues
+            ? Number(currentFinance.revenueRecords || 0)
+            : Number(oldFinance.revenueRecords || 0);
+          const expenseRecords = datasets.expenses
+            ? Number(currentFinance.expenseRecords || 0)
+            : Number(oldFinance.expenseRecords || 0);
+          candidate.finance = (revenueRecords || expenseRecords || old.finance) ? {
+            totalRevenue,
+            totalExpense,
+            revenueRecords,
+            expenseRecords,
+            balance: totalRevenue - totalExpense,
+            note: 'Valores publicados pela Justiça Eleitoral; conjuntos temporariamente indisponíveis mantêm a última versão oficial válida.',
+          } : null;
+        }
+        const preservedSourceIds = [
+          !datasets.candidateComplement && SOURCES.tseCandidateComplement.id,
+          !datasets.assets && SOURCES.tseAssets.id,
+          !datasets.social && SOURCES.tseSocial.id,
+          (!datasets.revenues || !datasets.expenses) && SOURCES.tseRevenue.id,
+          (!datasets.revenues || !datasets.expenses) && SOURCES.tseExpense.id,
+        ].filter(Boolean);
+        for (const source of old.sources || []) {
+          if (preservedSourceIds.includes(source.id) && !candidate.sources.some((item) => item.id === source.id)) {
+            candidate.sources.push(source);
+          }
+        }
+      }
       try {
         if (this.config.syncPhotos) {
           const photoResult = await this.photoSynchronizer.synchronize(candidates, trigger);
-          statuses[SOURCES.tsePhotos.id] = photoResult.status;
+          statuses[SOURCES.tsePhotos.id] = {
+            ...photoResult.status,
+            lastAttemptAt: photoResult.status?.updatedAt || new Date().toISOString(),
+            lastSuccessAt: photoResult.status?.updatedAt || new Date().toISOString(),
+            consecutiveFailures: 0,
+            alert: false,
+          };
         } else {
           const availablePhotos = await this.photoSynchronizer.hydrate(candidates);
           statuses[SOURCES.tsePhotos.id] = {
@@ -126,10 +214,14 @@ class OfficialDataSync {
         }
       } catch (error) {
         const availablePhotos = await this.photoSynchronizer.hydrate(candidates);
+        const previousPhotoStatus = previousStatuses[SOURCES.tsePhotos.id] || {};
         statuses[SOURCES.tsePhotos.id] = {
           state: availablePhotos.size ? 'PARTIAL' : 'ERROR',
           lastAttemptAt: new Date().toISOString(),
+          lastSuccessAt: previousPhotoStatus.lastSuccessAt || previousPhotoStatus.updatedAt || null,
           records: availablePhotos.size,
+          consecutiveFailures: Number(previousPhotoStatus.consecutiveFailures || 0) + 1,
+          alert: true,
           message: availablePhotos.size
             ? 'A atualização das fotos falhou; o último cache oficial válido foi preservado.'
             : 'A fonte oficial de fotos não respondeu e ainda não há cache disponível.',
@@ -141,7 +233,6 @@ class OfficialDataSync {
       Object.assign(statuses, legislative.statuses);
       voterCandidates.sort((a, b) => a.ballotName.localeCompare(b.ballotName, 'pt-BR'));
 
-      const previous = this.store.getSnapshot();
       const importedAt = new Date().toISOString();
       const generatedDates = candidateRows.map(sourceGeneratedAt).filter(Boolean).sort();
       const sourceGeneratedAtValue = generatedDates.at(-1) || null;
@@ -179,6 +270,7 @@ class OfficialDataSync {
       });
       return snapshot.meta;
     } catch (error) {
+      await this.store.updateSourceStatuses(statuses, new Date().toISOString());
       await this.store.recordRun({
         sourceId: 'votoclaro-pipeline',
         status: 'FAILED',
@@ -194,17 +286,28 @@ class OfficialDataSync {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
     try {
+      const headers = {
+        Accept: 'application/zip, application/octet-stream',
+        'User-Agent': 'VotoClaro/2.0 (+https://github.com/Lucas-Coelho-Dev/VotoClaro; dados-publicos)',
+      };
       const response = await fetch(url, {
         signal: controller.signal,
-        headers: {
-          Accept: 'application/zip, application/octet-stream',
-          'User-Agent': 'VotoClaro/2.0 (+https://votoclaro.org; dados-publicos)',
-        },
+        headers,
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status} em ${new URL(url).hostname}`);
-      const declaredSize = Number.parseInt(response.headers.get('content-length') || '0', 10);
-      if (declaredSize > this.config.maxDownloadBytes) throw new Error('Arquivo excede o limite de segurança configurado.');
-      const buffer = Buffer.from(await response.arrayBuffer());
+      let buffer;
+      if (response.status === 403) {
+        await response.arrayBuffer();
+        buffer = await downloadByRanges(url, {
+          signal: controller.signal,
+          headers,
+          maxBytes: this.config.maxDownloadBytes,
+        });
+      } else {
+        if (!response.ok) throw new Error(`HTTP ${response.status} em ${new URL(url).hostname}`);
+        const declaredSize = Number.parseInt(response.headers.get('content-length') || '0', 10);
+        if (declaredSize > this.config.maxDownloadBytes) throw new Error('Arquivo excede o limite de segurança configurado.');
+        buffer = Buffer.from(await response.arrayBuffer());
+      }
       if (buffer.length > this.config.maxDownloadBytes) throw new Error('Arquivo excede o limite de segurança configurado.');
       return this.parseZip(buffer);
     } catch (error) {

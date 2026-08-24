@@ -15,7 +15,7 @@ O plano gratuito do Render não é indicado para o VotoClaro: o serviço suspend
 - espaço para snapshots e fotos oficiais;
 - HTTPS, necessário também para localização em celulares;
 - segredo de sincronização com alta entropia;
-- processo contínuo capaz de atualizar a base a cada duas horas;
+- sincronizador contínuo capaz de atualizar a base oficial várias vezes ao dia;
 - monitoramento de `/api/v1/health`;
 - CPU e memória suficientes para importar arquivos nacionais e ler PDFs.
 
@@ -53,3 +53,9 @@ Antes de usar Vercel, confirme que duração e volume da importação nacional c
 ## Cache e rollback
 
 Force HTTPS e HSTS, não coloque segredos no frontend e mantenha respostas públicas com o cache previsto pela aplicação. Em falha de fonte, o VotoClaro conserva o último snapshot válido. Um rollback de código não deve apagar snapshots, execuções, fotos nem contagens agregadas.
+
+## Serviços separados na Oracle
+
+O `compose.free.yml` mantém seis responsabilidades isoladas: `app` serve o site e a API; `db` mantém o PostgreSQL; `llm` executa o modelo; `ai-worker` prepara resumos e explicações; `sync-worker` atualiza as fontes oficiais; e `caddy` termina HTTPS e encaminha o tráfego. O site continua respondendo enquanto a IA ou a importação usam CPU intensivamente.
+
+O sincronizador publica uma nova versão somente depois de concluir e validar o conjunto principal de candidaturas. Se bens, fotos ou prestações de contas falharem, mantém-se o último conjunto válido daquela fonte e o painel público registra o alerta, a tentativa e o último sucesso.

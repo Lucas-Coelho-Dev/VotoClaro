@@ -10,6 +10,7 @@ class SnapshotStore {
     this.runs = [];
     this.photoStates = new Map();
     this.candidateViews = new Map();
+    this.analysisReports = new Map();
     this.fileWriteChain = Promise.resolve();
     this.backend = config.databaseUrl ? 'postgresql' : 'filesystem';
   }
@@ -24,7 +25,7 @@ class SnapshotStore {
       await this.pool.query('SELECT 1');
       await this.migrate();
       const snapshotResult = await this.pool.query(
-        'SELECT payload FROM data_snapshots ORDER BY imported_at DESC LIMIT 1',
+        'SELECT payload FROM data_snapshots ORDER BY imported_at DESC, id DESC LIMIT 1',
       );
       this.latest = snapshotResult.rows[0]?.payload || null;
       const runResult = await this.pool.query(
@@ -64,6 +65,12 @@ class SnapshotStore {
         && aggregate.viewCount > 0
       ));
       this.candidateViews = new Map(entries);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    try {
+      const stored = JSON.parse(await fs.readFile(path.join(this.config.dataDir, 'analysis-reports.json'), 'utf8'));
+      this.analysisReports = new Map((stored?.reports || []).map((report) => [report.trackingCode, report]));
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
@@ -165,6 +172,24 @@ class SnapshotStore {
       );
       CREATE INDEX IF NOT EXISTS legislative_item_analyses_status_idx
         ON legislative_item_analyses (status, updated_at);
+
+      CREATE TABLE IF NOT EXISTS analysis_reports (
+        id BIGSERIAL PRIMARY KEY,
+        tracking_code TEXT NOT NULL UNIQUE,
+        candidate_id TEXT NOT NULL,
+        subject_type TEXT NOT NULL CHECK (subject_type IN ('GOVERNMENT_PLAN', 'LEGISLATIVE_ITEM')),
+        subject_key TEXT,
+        category TEXT NOT NULL,
+        page_number INTEGER,
+        details TEXT NOT NULL,
+        analysis_version TEXT,
+        status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'REVIEWING', 'RESOLVED', 'DISMISSED')),
+        resolution_note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS analysis_reports_status_idx
+        ON analysis_reports (status, created_at DESC);
     `);
   }
 
@@ -176,18 +201,48 @@ class SnapshotStore {
     return this.runs.slice(0, 30);
   }
 
+  async refreshSnapshot() {
+    let snapshot = null;
+    if (this.pool) {
+      const [snapshotResult, runResult] = await Promise.all([
+        this.pool.query('SELECT payload FROM data_snapshots ORDER BY imported_at DESC, id DESC LIMIT 1'),
+        this.pool.query(
+          'SELECT source_id AS "sourceId", status, started_at AS "startedAt", finished_at AS "finishedAt", record_count AS "recordCount", error_message AS "error" FROM sync_runs ORDER BY started_at DESC LIMIT 30',
+        ),
+      ]);
+      snapshot = snapshotResult.rows[0]?.payload || null;
+      this.runs = runResult.rows;
+    } else {
+      try {
+        snapshot = JSON.parse(await fs.readFile(path.join(this.config.dataDir, 'latest.json'), 'utf8'));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    if (!snapshot) return false;
+    const previousIdentity = `${this.latest?.meta?.checksum || ''}:${this.latest?.meta?.lastSyncAttemptAt || ''}`;
+    const currentIdentity = `${snapshot.meta?.checksum || ''}:${snapshot.meta?.lastSyncAttemptAt || ''}`;
+    const changed = previousIdentity !== currentIdentity;
+    if (changed) this.latest = snapshot;
+    return changed;
+  }
+
   async saveSnapshot(snapshot) {
     this.latest = snapshot;
     if (this.pool) {
       await this.pool.query(
         `INSERT INTO data_snapshots (checksum, source_generated_at, imported_at, record_count, payload)
          VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (checksum) DO NOTHING`,
+         ON CONFLICT (checksum) DO UPDATE SET
+           source_generated_at = EXCLUDED.source_generated_at,
+           imported_at = EXCLUDED.imported_at,
+           record_count = EXCLUDED.record_count,
+           payload = EXCLUDED.payload`,
         [snapshot.meta.checksum, snapshot.meta.sourceGeneratedAt, snapshot.meta.importedAt, snapshot.meta.candidateCount, snapshot],
       );
       await this.pool.query(
         `DELETE FROM data_snapshots WHERE id NOT IN (
-           SELECT id FROM data_snapshots ORDER BY imported_at DESC LIMIT $1
+           SELECT id FROM data_snapshots ORDER BY imported_at DESC, id DESC LIMIT $1
          )`,
         [this.config.snapshotRetention],
       );
@@ -195,6 +250,25 @@ class SnapshotStore {
     }
 
     await this.queuedJsonWrite(path.join(this.config.dataDir, 'latest.json'), snapshot);
+  }
+
+  async updateSourceStatuses(statuses, attemptedAt = new Date().toISOString()) {
+    if (!this.latest) return null;
+    const snapshot = {
+      ...this.latest,
+      meta: { ...this.latest.meta, lastSyncAttemptAt: attemptedAt },
+      sourceStatuses: { ...(this.latest.sourceStatuses || {}), ...statuses },
+    };
+    this.latest = snapshot;
+    if (this.pool) {
+      await this.pool.query(
+        'UPDATE data_snapshots SET payload = $2 WHERE checksum = $1',
+        [snapshot.meta.checksum, snapshot],
+      );
+      return snapshot;
+    }
+    await this.queuedJsonWrite(path.join(this.config.dataDir, 'latest.json'), snapshot);
+    return snapshot;
   }
 
   async recordRun(run) {
@@ -494,6 +568,123 @@ class SnapshotStore {
         record.createdAt || null,
       ],
     );
+  }
+
+  async createAnalysisReport(report) {
+    const stored = {
+      ...report,
+      status: 'OPEN',
+      createdAt: report.createdAt || new Date().toISOString(),
+      updatedAt: report.createdAt || new Date().toISOString(),
+    };
+    if (this.pool) {
+      await this.pool.query(
+        `INSERT INTO analysis_reports (
+           tracking_code, candidate_id, subject_type, subject_key, category,
+           page_number, details, analysis_version, status, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPEN', $9, $9)`,
+        [
+          stored.trackingCode,
+          stored.candidateId,
+          stored.subjectType,
+          stored.subjectKey || null,
+          stored.category,
+          stored.pageNumber || null,
+          stored.details,
+          stored.analysisVersion || null,
+          stored.createdAt,
+        ],
+      );
+      return stored;
+    }
+    this.analysisReports.set(stored.trackingCode, stored);
+    const reports = [...this.analysisReports.values()].slice(-1000);
+    await this.queuedJsonWrite(path.join(this.config.dataDir, 'analysis-reports.json'), { version: 1, reports });
+    return stored;
+  }
+
+  async getAnalysisReport(trackingCode) {
+    if (this.pool) {
+      const result = await this.pool.query(
+        `SELECT tracking_code AS "trackingCode", candidate_id AS "candidateId",
+                subject_type AS "subjectType", category, page_number AS "pageNumber",
+                analysis_version AS "analysisVersion", status,
+                resolution_note AS "resolutionNote", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM analysis_reports WHERE tracking_code = $1`,
+        [String(trackingCode)],
+      );
+      return result.rows[0] || null;
+    }
+    const report = this.analysisReports.get(String(trackingCode));
+    if (!report) return null;
+    const { details, subjectKey, ...publicReport } = report;
+    return publicReport;
+  }
+
+  async updateAnalysisReport(trackingCode, update) {
+    const updatedAt = new Date().toISOString();
+    if (this.pool) {
+      const result = await this.pool.query(
+        `UPDATE analysis_reports
+         SET status = $2, resolution_note = $3, updated_at = $4
+         WHERE tracking_code = $1
+         RETURNING tracking_code AS "trackingCode", candidate_id AS "candidateId",
+                   subject_type AS "subjectType", category, page_number AS "pageNumber",
+                   analysis_version AS "analysisVersion", status,
+                   resolution_note AS "resolutionNote", created_at AS "createdAt", updated_at AS "updatedAt"`,
+        [String(trackingCode), update.status, update.resolutionNote, updatedAt],
+      );
+      return result.rows[0] || null;
+    }
+    const report = this.analysisReports.get(String(trackingCode));
+    if (!report) return null;
+    const stored = { ...report, ...update, updatedAt };
+    this.analysisReports.set(stored.trackingCode, stored);
+    await this.queuedJsonWrite(path.join(this.config.dataDir, 'analysis-reports.json'), {
+      version: 1,
+      reports: [...this.analysisReports.values()].slice(-1000),
+    });
+    const { details, subjectKey, ...publicReport } = stored;
+    return publicReport;
+  }
+
+  async getAiAuditStats() {
+    if (!this.pool) {
+      const reportCounts = new Map();
+      for (const report of this.analysisReports.values()) {
+        reportCounts.set(report.status, (reportCounts.get(report.status) || 0) + 1);
+      }
+      return {
+        governmentPlans: [],
+        legislativeItems: [],
+        correctionReports: [...reportCounts].map(([status, count]) => ({ status, count })),
+      };
+    }
+    const [plans, legislative, reports] = await Promise.all([
+      this.pool.query(
+        `SELECT analysis_version AS "analysisVersion", prompt_version AS "promptVersion", model,
+                status, COUNT(*)::integer AS count, MAX(updated_at) AS "lastUpdatedAt"
+         FROM government_plan_analyses
+         GROUP BY analysis_version, prompt_version, model, status
+         ORDER BY "lastUpdatedAt" DESC`,
+      ),
+      this.pool.query(
+        `SELECT analysis_version AS "analysisVersion", prompt_version AS "promptVersion", model,
+                status, COUNT(*)::integer AS count, MAX(updated_at) AS "lastUpdatedAt"
+         FROM legislative_item_analyses
+         GROUP BY analysis_version, prompt_version, model, status
+         ORDER BY "lastUpdatedAt" DESC`,
+      ),
+      this.pool.query(
+        `SELECT status, COUNT(*)::integer AS count, MAX(updated_at) AS "lastUpdatedAt"
+         FROM analysis_reports GROUP BY status ORDER BY status`,
+      ),
+    ]);
+    return {
+      governmentPlans: plans.rows,
+      legislativeItems: legislative.rows,
+      correctionReports: reports.rows,
+    };
   }
 
   async queuedJsonWrite(target, value) {

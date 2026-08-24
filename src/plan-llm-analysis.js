@@ -507,11 +507,41 @@ function mergeFallbackThemes(explainedThemes, fallbackSummary) {
   });
 }
 
+function firstSentence(value, maximum = 260) {
+  const text = cleanText(value, maximum);
+  const boundary = text.search(/[.!?…](?:\s|$)/u);
+  const sentence = boundary >= 0 ? text.slice(0, boundary + 1) : completeGeneratedSentence(text, maximum);
+  return sentence.replace(/[,;:]\s*([.!?…])$/u, '$1').replace(/\s+([,.!?…])/gu, '$1');
+}
+
+function buildGeneralObjective(themeSummaries) {
+  const priorities = (themeSummaries || [])
+    .filter((theme) => theme.status === 'FOUND' && theme.digest?.summary && theme.digest?.evidences?.length)
+    .map((theme) => ({
+      id: theme.id,
+      label: theme.label,
+      summary: firstSentence(theme.digest.summary),
+      page: Number(theme.digest.evidences[0].page) || 1,
+      evidence: theme.digest.evidences[0],
+    }));
+  if (!priorities.length) return null;
+  const labels = priorities.map((priority) => priority.label.toLocaleLowerCase('pt-BR'));
+  const joinedLabels = labels.length === 1
+    ? labels[0]
+    : `${labels.slice(0, -1).join(', ')} e ${labels.at(-1)}`;
+  return {
+    summary: `O plano reúne propostas em ${priorities.length} ${priorities.length === 1 ? 'tema' : 'temas'}: ${joinedLabels}. O panorama abaixo mostra a principal direção identificada em cada área; os campos seguintes apresentam os trechos, impactos condicionais e lacunas separadamente.`,
+    priorities: priorities.map(({ evidence, ...priority }) => priority),
+    evidences: priorities.map((priority) => priority.evidence),
+    pages: [...new Set(priorities.map((priority) => priority.page))].sort((left, right) => left - right),
+    grounding: 'GENERAL_OVERVIEW_FROM_EACH_THEME_DIGEST',
+  };
+}
+
 async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, config, candidateName, onProgress }) {
   const chunks = chunksFromEvidenceSummary(fallbackSummary, config.localLlmChunkCharacters);
   if (!chunks.length) throw new Error('O PDF não contém texto suficiente para a análise local.');
   const rawThemeDigests = [];
-  const rawObjectives = [];
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
     await onProgress?.({ stage: 'EXPLAINING', completed: index, total: chunks.length });
@@ -527,17 +557,13 @@ async function createLocalLlmSummary({ pages, fallbackSummary, client, themes, c
       }
     }
     rawThemeDigests.push(...result.themeDigests);
-    rawObjectives.push(result.objective);
     await onProgress?.({ stage: 'EXPLAINING', completed: index + 1, total: chunks.length });
   }
   const pagesByNumber = new Map(pages.map((page) => [Number(page.page), normalizedEvidenceText(page.text)]));
   const themeSummaries = attachThemeDigests(rawThemeDigests, themes, pagesByNumber, fallbackSummary, candidateName);
   const explainedThemeCount = themeSummaries.filter((theme) => theme.digest).length;
   const foundThemes = themeSummaries.filter((theme) => theme.status === 'FOUND');
-  const candidateObjective = rawObjectives
-    .map((objective) => sanitizeObjectiveFromThemes(objective, themes, pagesByNumber, fallbackSummary))
-    .filter(Boolean)
-    .sort((left, right) => right.evidences.length - left.evidences.length)[0] || null;
+  const candidateObjective = buildGeneralObjective(themeSummaries);
   const generatedAt = new Date().toISOString();
   return {
     ...fallbackSummary,
@@ -584,6 +610,7 @@ module.exports = {
   chunksFromPages,
   chunksFromEvidenceSummary,
   createLocalLlmSummary,
+  buildGeneralObjective,
   normalizedEvidenceText,
   validatedEvidences,
   consolidateByTheme,

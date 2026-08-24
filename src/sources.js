@@ -29,6 +29,7 @@ const SOURCES = Object.freeze({
     url: 'https://dadosabertos.tse.jus.br/dataset/candidatos-2026',
     resourceUrl: 'https://cdn.tse.jus.br/estatistica/sead/odsele/bem_candidato/bem_candidato_2026.zip',
     description: 'Declarações de bens apresentadas pelas pessoas candidatas.',
+    optional: true,
   },
   tseSocial: {
     id: 'tse-social-2026',
@@ -39,6 +40,7 @@ const SOURCES = Object.freeze({
     url: 'https://dadosabertos.tse.jus.br/dataset/candidatos-2026',
     resourceUrl: 'https://cdn.tse.jus.br/estatistica/sead/odsele/consulta_cand/rede_social_candidato_2026.zip',
     description: 'Endereços de redes sociais informados no registro da candidatura.',
+    optional: true,
   },
   tsePhotos: {
     id: 'tse-photos-2026',

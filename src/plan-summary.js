@@ -1,6 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
-const { createLocalLlmSummary, completeGeneratedSentence } = require('./plan-llm-analysis');
+const { createLocalLlmSummary, completeGeneratedSentence, buildGeneralObjective } = require('./plan-llm-analysis');
 const {
   LOCAL_LLM_ANALYSIS_VERSION,
   LOCAL_LLM_PROMPT_VERSION,
@@ -550,21 +550,19 @@ class GovernmentPlanSummaryService {
   }
 
   publicAnalysisPayload(payload) {
+    const themeSummaries = (payload?.themeSummaries || []).map((theme) => ({
+      ...theme,
+      digest: theme.digest ? {
+        ...theme.digest,
+        summary: completeGeneratedSentence(theme.digest.summary, 540),
+        potentialImpact: completeGeneratedSentence(theme.digest.potentialImpact, 560),
+        conditionsAndLimits: completeGeneratedSentence(theme.digest.conditionsAndLimits, 420),
+      } : theme.digest,
+    }));
     return {
       ...payload,
-      candidateObjective: payload?.candidateObjective ? {
-        ...payload.candidateObjective,
-        summary: completeGeneratedSentence(payload.candidateObjective.summary, 520),
-      } : payload?.candidateObjective,
-      themeSummaries: (payload?.themeSummaries || []).map((theme) => ({
-        ...theme,
-        digest: theme.digest ? {
-          ...theme.digest,
-          summary: completeGeneratedSentence(theme.digest.summary, 540),
-          potentialImpact: completeGeneratedSentence(theme.digest.potentialImpact, 560),
-          conditionsAndLimits: completeGeneratedSentence(theme.digest.conditionsAndLimits, 420),
-        } : theme.digest,
-      })),
+      candidateObjective: buildGeneralObjective(themeSummaries) || payload?.candidateObjective,
+      themeSummaries,
     };
   }
 

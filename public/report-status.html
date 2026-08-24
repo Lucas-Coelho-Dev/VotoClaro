@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Acompanhe um relato de correção enviado ao VotoClaro.">
+  <meta name="theme-color" content="#102a43">
+  <title>Acompanhar correção — VotoClaro</title>
+  <link rel="icon" href="/favicon.svg?v=1" type="image/svg+xml">
+  <link rel="stylesheet" href="/official.css?v=2.18.0">
+  <script src="/report-status.js?v=1.0.0" defer></script>
+</head>
+<body>
+  <main class="legal-page">
+    <a class="legal-back" href="/">← Voltar ao VotoClaro</a>
+    <article class="legal-card">
+      <p class="eyebrow">Correção rastreável</p>
+      <h1>Acompanhar um relato</h1>
+      <p>Digite o protocolo recebido após enviar um problema.</p>
+      <form id="reportLookup" class="report-lookup">
+        <label for="trackingCode">Protocolo</label>
+        <input id="trackingCode" name="trackingCode" required maxlength="15" placeholder="VC-1234ABCDEF56" autocomplete="off">
+        <button class="primary-button" type="submit">Consultar</button>
+      </form>
+      <div id="reportStatus" class="report-status" role="status"></div>
+    </article>
+  </main>
+</body>
+</html>

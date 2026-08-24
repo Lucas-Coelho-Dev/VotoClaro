@@ -10,6 +10,7 @@ const {
 
 let server;
 let timer;
+let snapshotRefreshTimer;
 
 function precomputeLatestGovernmentPlans() {
   const snapshot = store.getSnapshot();
@@ -44,19 +45,32 @@ async function start() {
     precomputeLatestGovernmentPlans();
   }
 
-  timer = setInterval(() => {
-    synchronizer.synchronize('scheduled')
-      .then(() => precomputeLatestGovernmentPlans())
-      .catch((error) => {
-        console.error('Falha na sincronização agendada:', error.message);
-      });
-  }, config.syncIntervalMinutes * 60 * 1000);
-  timer.unref();
+  if (config.syncSchedulerEnabled) {
+    timer = setInterval(() => {
+      synchronizer.synchronize('scheduled')
+        .then(() => precomputeLatestGovernmentPlans())
+        .catch((error) => {
+          console.error('Falha na sincronização agendada:', error.message);
+        });
+    }, config.syncIntervalMinutes * 60 * 1000);
+    timer.unref();
+  }
+
+  snapshotRefreshTimer = setInterval(async () => {
+    try {
+      const changed = await store.refreshSnapshot();
+      if (changed) console.log(`Nova versão oficial carregada no site: ${store.getSnapshot()?.meta?.importedAt || 'horário não informado'}.`);
+    } catch (error) {
+      console.error('Falha ao recarregar a versão publicada pelo sincronizador:', error.message);
+    }
+  }, config.snapshotRefreshSeconds * 1000);
+  snapshotRefreshTimer.unref();
 }
 
 async function shutdown(signal) {
   console.log(`Encerrando por ${signal}...`);
   if (timer) clearInterval(timer);
+  if (snapshotRefreshTimer) clearInterval(snapshotRefreshTimer);
   if (server) await new Promise((resolve) => server.close(resolve));
   await store.close();
   process.exit(0);

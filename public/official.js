@@ -111,6 +111,7 @@ function cacheElements() {
     comparisonContent: byId('comparisonContent'),
     colinhaSlots: byId('colinhaSlots'),
     sourceGrid: byId('sourceGrid'),
+    sourceAlerts: byId('sourceAlerts'),
     syncRuns: byId('syncRuns'),
     changesList: byId('changesList'),
   });
@@ -148,7 +149,9 @@ function bindEvents() {
   elements.candidateGrid.addEventListener('click', handleCandidateAction);
   elements.popularGrid.addEventListener('click', handleCandidateAction);
   elements.candidateDetail.addEventListener('click', handleCandidateAction);
+  elements.candidateDetail.addEventListener('submit', handleAnalysisReportSubmit);
   elements.comparisonContent.addEventListener('click', handleCandidateAction);
+  elements.comparisonContent.addEventListener('submit', handleAnalysisReportSubmit);
   elements.colinhaSlots.addEventListener('click', (event) => {
     const remove = event.target.closest('[data-remove-slot]');
     if (remove) removeColinhaSlot(remove.dataset.removeSlot);
@@ -188,7 +191,8 @@ async function loadHealth() {
     const health = await response.json();
     const healthy = health.status === 'OK';
     elements.healthBadge.className = `health-badge ${healthy ? 'is-ok' : 'is-warning'}`;
-    elements.healthBadge.innerHTML = `<span class="health-dot"></span><span>${healthy ? 'Dados atualizados' : health.status === 'INITIALIZING' ? 'Sincronizando com o TSE' : 'Dados precisam atualizar'}</span>`;
+    const alertCount = Array.isArray(health.sourceAlerts) ? health.sourceAlerts.length : 0;
+    elements.healthBadge.innerHTML = `<span class="health-dot"></span><span>${alertCount ? `${alertCount} ${alertCount === 1 ? 'fonte com alerta' : 'fontes com alerta'}` : healthy ? 'Dados atualizados' : health.status === 'INITIALIZING' ? 'Sincronizando com o TSE' : 'Dados precisam atualizar'}</span>`;
     if (health.candidateCount) elements.candidateTotalHero.textContent = formatNumber(health.candidateCount);
   } catch {
     elements.healthBadge.className = 'health-badge is-warning';
@@ -485,7 +489,7 @@ function changePage(delta) {
 
 function updateSnapshot(snapshot) {
   const sourceTime = snapshot.sourceGeneratedAt ? `Fonte gerada em ${formatDate(snapshot.sourceGeneratedAt)}` : 'Horário de geração não informado';
-  elements.snapshotTime.textContent = `${sourceTime} · importada em ${formatDate(snapshot.importedAt)}`;
+  elements.snapshotTime.textContent = `${sourceTime} · última atualização publicada em ${formatDate(snapshot.importedAt)}`;
 }
 
 function showNotice(message) {
@@ -710,7 +714,7 @@ async function loadLegislative(id) {
   container.innerHTML = '<div class="mini-loading">Confirmando autoria, projetos e normas nas fontes legislativas oficiais…</div>';
   try {
     const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative?v=legislative-profile-v3`);
-    container.innerHTML = renderLegislativeContent(payload.data, false);
+    container.innerHTML = renderLegislativeContent(payload.data, false, id);
     clearTimeout(container.legislativePollTimer);
     if (payload.data?.laws?.some((law) => ['QUEUED', 'PROCESSING'].includes(law.plainLanguage?.status))) {
       container.legislativePollTimer = setTimeout(() => loadLegislative(id), 6000);
@@ -741,7 +745,14 @@ function renderIntegrityData(data, compact = false) {
   return `<div class="integrity-check"><div class="integrity-alert"><div><span>LEITURA RESPONSÁVEL</span><strong>${escapeHtml(data.summary?.label || 'Consulta oficial concluída')}</strong></div><p>${escapeHtml(data.summary?.warning || 'Cada registro é mostrado com sua situação e fonte; não há nota automática.')}</p></div>${renderIntegrityRegistry('Decisões e impedimentos do TCU', data.publicAccounts, renderTcuRecord)}${renderIntegrityRegistry('Sanções administrativas federais', data.sanctions, renderSanctionRecord)}${renderIntegrityMoney(data)}${methodology}<p class="muted">Consulta realizada em ${formatDate(data.checkedAt)}.</p></div>`;
 }
 
-function proposalCard(proposal) {
+function renderLegislativeReportForm(proposal, candidateId) {
+  if (!candidateId || proposal.plainLanguage?.status !== 'READY') return '';
+  const subjectKey = String(proposal.analysisKey || proposal.id || proposal.officialUrl || '').slice(0, 128);
+  const version = proposal.plainLanguage.analysisVersion || 'legislative-plain-language-v3';
+  return `<details class="problem-report compact"><summary>Encontrou um problema nesta explicação?</summary><form data-analysis-report-form><input type="hidden" name="candidateId" value="${escapeHtml(candidateId)}"><input type="hidden" name="subjectType" value="LEGISLATIVE_ITEM"><input type="hidden" name="subjectKey" value="${escapeHtml(subjectKey)}"><input type="hidden" name="analysisVersion" value="${escapeHtml(version)}"><label>O que precisa ser revisto?<select name="category" required><option value="">Selecione</option><option value="INCORRECT_EXCERPT">Ementa interpretada incorretamente</option><option value="AUTHORSHIP">Associação de autoria incorreta</option><option value="BIASED_LANGUAGE">Linguagem tendenciosa</option><option value="OTHER">Outro problema</option></select></label><label>Explique o problema<textarea name="details" minlength="20" maxlength="1000" required></textarea></label><button class="secondary-button" type="submit">Enviar para revisão</button><p class="report-result" role="status" data-report-result></p></form></details>`;
+}
+
+function proposalCard(proposal, candidateId = '') {
   const themes = proposal.themes?.length
     ? `<div class="proposal-themes">${proposal.themes.map((theme) => `<span>${escapeHtml(theme)}</span>`).join('')}</div>`
     : '';
@@ -762,11 +773,11 @@ function proposalCard(proposal) {
     <div class="proposal-block"><span>Confirmação da fonte legislativa</span><p>${escapeHtml(proposal.status || 'Norma gerada confirmada na consulta oficial.')}</p></div>
     <div class="effect-evidence effect-${escapeHtml(String(evidence.stage || '').toLowerCase())}"><strong>${escapeHtml(evidence.label)}</strong><p>${escapeHtml(evidence.explanation)}</p></div>
     <div class="effect-evidence effect-impact"><strong>${escapeHtml(evidence.impactLabel || 'Impacto na sociedade')}</strong><p>${escapeHtml(evidence.impactExplanation || 'Nenhuma medição pública oficial foi vinculada nesta consulta.')}</p></div>
-    <a class="inline-link" href="${escapeHtml(proposal.officialUrl)}" target="_blank" rel="noopener noreferrer">Conferir autoria e tramitação ↗</a>${proposal.normOfficialUrl ? ` · <a class="inline-link" href="${escapeHtml(proposal.normOfficialUrl)}" target="_blank" rel="noopener noreferrer">Abrir norma oficial ↗</a>` : ''}
+    <a class="inline-link" href="${escapeHtml(proposal.officialUrl)}" target="_blank" rel="noopener noreferrer">Conferir autoria e tramitação ↗</a>${proposal.normOfficialUrl ? ` · <a class="inline-link" href="${escapeHtml(proposal.normOfficialUrl)}" target="_blank" rel="noopener noreferrer">Abrir norma oficial ↗</a>` : ''}${renderLegislativeReportForm(proposal, candidateId)}
   </article>`;
 }
 
-function renderLegislativeContent(data, includeExpenses = false) {
+function renderLegislativeContent(data, includeExpenses = false, candidateId = '') {
   const expenses = includeExpenses
     ? (data.expenses
       ? `<div class="fact"><span>Despesas consultadas em 2026</span><strong>${formatCurrency(data.expenses.totalShown)}</strong></div><div class="fact"><span>Registros considerados</span><strong>${formatNumber(data.expenses.recordsShown)}${data.expenses.partial ? ' — recorte parcial' : ''}</strong></div>`
@@ -776,7 +787,7 @@ function renderLegislativeContent(data, includeExpenses = false) {
     ? `<div class="fact-grid">${expenses}<div class="fact"><span>Casa legislativa</span><strong>${escapeHtml(data.chamber)}</strong></div></div>`
     : '';
   const laws = data.laws?.length
-    ? `<div class="proposal-list">${data.laws.slice(0, 3).map(proposalCard).join('')}</div>`
+    ? `<div class="proposal-list">${data.laws.slice(0, 3).map((proposal) => proposalCard(proposal, candidateId)).join('')}</div>`
     : '<div class="not-published"><strong>Nenhum projeto ou norma passou por todas as confirmações deste recorte.</strong><br>Isso não prova que a pessoa nunca participou de outra matéria: a consulta cobre somente as autorias retornadas para o mandato vinculado.</div>';
   return `<div class="legislative-results">${facts}${data.note ? `<p class="muted">${escapeHtml(data.note)}</p>` : ''}<p class="method-note">${escapeHtml(data.methodology?.rule || 'Recorte de normas e autorias publicado pela Casa legislativa.')} ${escapeHtml(data.methodology?.impactRule || '')}</p>${laws}<p class="muted">Consultado em ${formatDate(data.source.fetchedAt)} · <a href="${escapeHtml(data.source.url)}" target="_blank" rel="noopener noreferrer">fonte oficial</a></p></div>`;
 }
@@ -825,7 +836,7 @@ async function loadGovernmentPlanSummary(id, container) {
     const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v16`);
     if (container.planSummaryCandidateId !== String(id)) return;
     const viewState = capturePlanViewState(host);
-    host.innerHTML = renderPlanSummary(payload.data);
+    host.innerHTML = renderPlanSummary(payload.data, id);
     restorePlanViewState(host, viewState);
     clearTimeout(container.planSummaryPollTimer);
     const retrying = payload.data?.aiAnalysis?.status === 'FAILED'
@@ -851,13 +862,20 @@ function renderPlanObjective(objective, pdfUrl) {
     const boundary = Math.max(text.lastIndexOf('.'), text.lastIndexOf('!'), text.lastIndexOf('?'));
     return boundary >= Math.floor(text.length * 0.35) ? text.slice(0, boundary + 1).trim() : text;
   })();
-  const pageLinks = objective.evidences.map((evidence) => (
-    `<a href="${escapeHtml(pdfUrl)}#page=${Number(evidence.page) || 1}" target="_blank" rel="noopener noreferrer">p. ${Number(evidence.page) || 1}</a>`
-  )).join(' · ');
-  return `<article class="plan-objective"><span>OBJETIVO CENTRAL · LEITURA DA IA</span><h5>O que este plano pretende mudar?</h5><p>${escapeHtml(summary)}</p><div><strong>Baseado em trechos validados:</strong> ${pageLinks}</div></article>`;
+  const priorities = Array.isArray(objective.priorities) ? objective.priorities : [];
+  const priorityList = priorities.length
+    ? `<div class="objective-theme-list">${priorities.map((priority) => `<article><div><strong>${escapeHtml(priority.label)}</strong><p>${escapeHtml(priority.summary)}</p></div><a href="${escapeHtml(pdfUrl)}#page=${Number(priority.page) || 1}" target="_blank" rel="noopener noreferrer" aria-label="Conferir ${escapeHtml(priority.label)} na página ${Number(priority.page) || 1}">p. ${Number(priority.page) || 1} ↗</a></article>`).join('')}</div>`
+    : `<div class="objective-sources"><strong>Baseado em trechos validados:</strong> ${objective.evidences.map((evidence) => `<a href="${escapeHtml(pdfUrl)}#page=${Number(evidence.page) || 1}" target="_blank" rel="noopener noreferrer">p. ${Number(evidence.page) || 1}</a>`).join(' · ')}</div>`;
+  return `<article class="plan-objective"><span>VISÃO GERAL DO PLANO · LEITURA DA IA</span><h5>O que este plano pretende mudar no conjunto?</h5><p>${escapeHtml(summary)}</p>${priorityList}</article>`;
 }
 
-function renderPlanSummary(summary) {
+function renderAnalysisReportForm(summary, candidateId) {
+  if (!candidateId) return '';
+  const version = summary?.aiAnalysis?.analysisVersion || summary?.aiAnalysis?.version || 'não informada';
+  return `<details class="problem-report"><summary>Encontrou um problema nesta análise?</summary><form data-analysis-report-form><input type="hidden" name="candidateId" value="${escapeHtml(candidateId)}"><input type="hidden" name="subjectType" value="GOVERNMENT_PLAN"><input type="hidden" name="analysisVersion" value="${escapeHtml(version)}"><label>O que precisa ser revisto?<select name="category" required><option value="">Selecione</option><option value="INCORRECT_EXCERPT">Trecho interpretado incorretamente</option><option value="WRONG_PAGE">Página indicada está errada</option><option value="AUTHORSHIP">Associação de autoria incorreta</option><option value="BIASED_LANGUAGE">Linguagem tendenciosa</option><option value="OTHER">Outro problema</option></select></label><label>Página do PDF, se houver<input name="pageNumber" type="number" min="1" max="5000" inputmode="numeric"></label><label>Explique o problema<textarea name="details" minlength="20" maxlength="1000" required placeholder="Descreva o que está incorreto e, se possível, indique o trecho oficial."></textarea></label><button class="secondary-button" type="submit">Enviar para revisão</button><p class="report-result" role="status" data-report-result></p></form><a class="inline-link" href="/report-status.html">Acompanhar um protocolo</a></details>`;
+}
+
+function renderPlanSummary(summary, candidateId = '') {
   if (!summary?.themeSummaries?.length) {
     return '<div class="not-published">O PDF foi localizado, mas não contém texto extraível suficiente para um resumo confiável. Consulte o documento original.</div>';
   }
@@ -891,7 +909,7 @@ function renderPlanSummary(summary) {
     ? ` · IA local ${escapeHtml(summary.aiAnalysis.model || '')} · ${Number(summary.aiAnalysis.evidenceExcerpts || 0)} evidências selecionadas`
     : '';
   const objective = localAiReady ? renderPlanObjective(summary.candidateObjective, summary.pdfUrl) : '';
-  return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">${analysisBadge}</span><h4>Entenda o plano antes de escolher</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com propostas</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p>${pending}${objective}<div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas${modelNote} · gerado em ${formatDate(summary.generatedAt)}</span></div></section>`;
+  return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">${analysisBadge}</span><h4>Entenda o plano antes de escolher</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com propostas</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p>${pending}${objective}<div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas${modelNote} · gerado em ${formatDate(summary.generatedAt)}</span><a class="inline-link" href="/ai-methodology.html">Ver modelo, prompt, validações e histórico da IA</a></div>${renderAnalysisReportForm(summary, candidateId)}</section>`;
 }
 
 function renderPlanTheme(theme, pdfUrl, open = false) {
@@ -958,7 +976,7 @@ function renderGovernmentPlan(plan, candidateId, summary = null) {
     return `<div class="not-published">${escapeHtml(plan?.message || 'O documento não consta no arquivo oficial atual.')}</div>`;
   }
   const summaryContent = summary
-    ? renderPlanSummary({ ...summary, pdfUrl: summary.pdfUrl || plan.url })
+    ? renderPlanSummary({ ...summary, pdfUrl: summary.pdfUrl || plan.url }, candidateId)
     : '<div class="mini-loading">Lendo as páginas e classificando propostas nos 9 temas…</div>';
   return `<div class="plan-experience"><div data-plan-summary-host>${summaryContent}</div><article class="plan-card"><span class="source-state ok">Documento oficial localizado</span><h4>Plano de governo entregue ao TSE</h4><p>Associado pelo identificador único da candidatura. O resumo acima é automático; o PDF permanece como fonte integral.</p><a class="secondary-button document-link" href="${escapeHtml(plan.url)}" target="_blank" rel="noopener noreferrer">Abrir PDF completo</a><a class="inline-link" href="${escapeHtml(plan.source.url)}" target="_blank" rel="noopener noreferrer">Ver conjunto de dados do TSE ↗</a></article></div>`;
 }
@@ -1122,12 +1140,16 @@ function colinhaPlainText() {
     const party = candidate.party ? ` · ${candidate.party}` : '';
     return `${label}: ${number} — ${candidate.ballotName}${party}`;
   });
+  const invitationUrl = new URL('/', window.location.origin);
+  invitationUrl.searchParams.set('nova-colinha', '1');
   return [
     'MINHA COLINHA — ELEIÇÕES 2026',
     '',
     ...choices,
     '',
     'Confira os números antes de votar. Colinha montada no VotoClaro.',
+    '',
+    `Faça também a sua colinha: ${invitationUrl.toString()}`,
   ].join('\n');
 }
 async function writeClipboardText(text) {
@@ -1175,17 +1197,48 @@ function renderColinha() {
   byId('continueColinha').textContent = complete ? 'Revisar colinha' : 'Continuar minha colinha';
 }
 
+async function handleAnalysisReportSubmit(event) {
+  const form = event.target.closest('[data-analysis-report-form]');
+  if (!form) return;
+  event.preventDefault();
+  const result = form.querySelector('[data-report-result]');
+  const button = form.querySelector('button[type="submit"]');
+  const values = Object.fromEntries(new FormData(form).entries());
+  if (!values.pageNumber) delete values.pageNumber;
+  result.textContent = 'Enviando para revisão…';
+  button.disabled = true;
+  try {
+    const payload = await requestJson('/api/v1/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values),
+    });
+    const data = payload.data;
+    result.innerHTML = `Relato recebido. Protocolo <strong>${escapeHtml(data.trackingCode)}</strong>. <a href="${escapeHtml(data.statusUrl)}">Acompanhar correção</a>`;
+    form.querySelector('textarea').value = '';
+  } catch (error) {
+    result.textContent = error.message || 'Não foi possível enviar o relato agora.';
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadSources() {
   elements.sourceGrid.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   try {
     const payload = await requestJson('/api/v1/sources');
+    const alerts = Array.isArray(payload.alerts) ? payload.alerts : [];
+    elements.sourceAlerts.innerHTML = alerts.length
+      ? `<section class="source-alert-panel" role="alert"><strong>${alerts.length} ${alerts.length === 1 ? 'fonte exige atenção' : 'fontes exigem atenção'}</strong><p>A versão publicada anterior continua no ar enquanto uma nova tentativa é feita.</p>${alerts.map((alert) => `<div><span>${escapeHtml(alert.sourceId)}</span><p>${escapeHtml(alert.message)}</p><small>Última tentativa: ${formatDate(alert.lastAttemptAt)} · último sucesso: ${formatDate(alert.lastSuccessAt)}</small></div>`).join('')}</section>`
+      : '<section class="source-ok-panel"><strong>Todas as fontes automáticas responderam na última execução.</strong></section>';
     elements.sourceGrid.innerHTML = payload.sources.map((source) => {
       const current = source.status || {};
       const stateLabel = { OK: 'Ativa', PARTIAL: 'Parcial', PLANNED: 'Planejada', NOT_SYNCED: 'Não sincronizada', UNAVAILABLE: 'Ainda indisponível', ERROR: 'Falha temporária' }[current.state] || current.state;
-      return `<article class="source-card"><div><span class="source-state ${String(current.state || '').toLowerCase()}">${escapeHtml(stateLabel)}</span><span class="source-kind">${source.kind === 'OFFICIAL' ? 'Fonte oficial' : 'Fonte secundária'}</span></div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(source.description)}</p><div class="source-meta"><p><strong>Periodicidade:</strong> ${escapeHtml(source.cadence)}</p><p>${escapeHtml(current.message || '')}</p><a class="inline-link" href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">Abrir fonte ↗</a></div></article>`;
+      return `<article class="source-card"><div><span class="source-state ${String(current.state || '').toLowerCase()}">${escapeHtml(stateLabel)}</span><span class="source-kind">${source.kind === 'OFFICIAL' ? 'Fonte oficial' : 'Fonte secundária'}</span></div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(source.description)}</p><div class="source-meta"><p><strong>Periodicidade:</strong> ${escapeHtml(source.cadence)}</p><p>${escapeHtml(current.message || '')}</p>${current.lastSuccessAt ? `<p><strong>Último sucesso:</strong> ${formatDate(current.lastSuccessAt)}</p>` : ''}${current.lastAttemptAt ? `<p><strong>Última tentativa:</strong> ${formatDate(current.lastAttemptAt)}</p>` : ''}<a class="inline-link" href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">Abrir fonte ↗</a></div></article>`;
     }).join('');
     elements.syncRuns.innerHTML = payload.syncRuns.length ? payload.syncRuns.map((run) => `<div class="sync-row"><strong>${escapeHtml(run.sourceId)}</strong><span>${escapeHtml(run.status)}</span><span>${formatDate(run.finishedAt || run.startedAt)}</span><span>${run.recordCount ? formatNumber(run.recordCount) : '—'}</span></div>`).join('') : '<div class="sync-row"><span>Ainda não há execuções registradas.</span></div>';
   } catch {
+    elements.sourceAlerts.innerHTML = '';
     elements.sourceGrid.innerHTML = '<div class="empty-state"><strong>Auditoria indisponível</strong><p>Tente novamente em instantes.</p></div>';
   }
 }
@@ -1217,6 +1270,9 @@ async function initialize() {
   renderSkeletons();
   await loadHealth();
   await Promise.all([loadFilters(), loadCandidates(), loadPopularCandidates()]);
+  if (new URLSearchParams(window.location.search).get('nova-colinha') === '1') {
+    showNotice('Você recebeu uma colinha. Pesquise suas candidaturas e monte a sua — as escolhas ficam somente neste navegador.');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', initialize);
