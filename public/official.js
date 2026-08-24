@@ -784,14 +784,38 @@ function renderLegislativeContent(data, includeExpenses = false) {
 async function loadGovernmentPlan(id) {
   const container = byId('governmentPlanData');
   if (!container) return;
+  clearTimeout(container.planSummaryPollTimer);
+  container.planSummaryCandidateId = String(id);
   container.innerHTML = '<div class="mini-loading">Localizando e lendo o documento oficial do TSE…</div>';
   try {
     const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/status`);
+    if (container.planSummaryCandidateId !== String(id)) return;
     container.innerHTML = renderGovernmentPlan(payload.data, id);
     if (payload.data?.available) await loadGovernmentPlanSummary(id, container);
   } catch {
+    if (container.planSummaryCandidateId !== String(id)) return;
     container.innerHTML = '<div class="not-published">Não foi possível consultar o arquivo oficial agora. Nenhum documento alternativo foi usado.</div>';
   }
+}
+
+function capturePlanViewState(host) {
+  const scrollHost = host.closest('.candidate-dialog');
+  return {
+    alreadyRendered: Boolean(host.querySelector('.plan-summary')),
+    openThemeIds: new Set([...host.querySelectorAll('[data-plan-theme][open]')]
+      .map((theme) => theme.getAttribute('data-plan-theme'))
+      .filter(Boolean)),
+    scrollHost,
+    scrollTop: scrollHost?.scrollTop || 0,
+  };
+}
+
+function restorePlanViewState(host, viewState) {
+  if (!viewState.alreadyRendered) return;
+  host.querySelectorAll('[data-plan-theme]').forEach((theme) => {
+    theme.open = viewState.openThemeIds.has(theme.getAttribute('data-plan-theme'));
+  });
+  if (viewState.scrollHost) viewState.scrollHost.scrollTop = viewState.scrollTop;
 }
 
 async function loadGovernmentPlanSummary(id, container) {
@@ -799,16 +823,22 @@ async function loadGovernmentPlanSummary(id, container) {
   if (!host) return;
   try {
     const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/government-plan/summary?v=local-llm-v16`);
+    if (container.planSummaryCandidateId !== String(id)) return;
+    const viewState = capturePlanViewState(host);
     host.innerHTML = renderPlanSummary(payload.data);
+    restorePlanViewState(host, viewState);
     clearTimeout(container.planSummaryPollTimer);
     const retrying = payload.data?.aiAnalysis?.status === 'FAILED'
       && Number(payload.data?.aiAnalysis?.attempts || 0) < 3;
     if (['QUEUED', 'PROCESSING'].includes(payload.data?.aiAnalysis?.status) || retrying) {
       container.planSummaryPollTimer = setTimeout(() => {
-        if (container.isConnected) loadGovernmentPlanSummary(id, container);
+        if (container.isConnected && container.planSummaryCandidateId === String(id)) {
+          loadGovernmentPlanSummary(id, container);
+        }
       }, 8000);
     }
   } catch {
+    if (container.planSummaryCandidateId !== String(id)) return;
     host.innerHTML = '<div class="not-published">O PDF oficial está disponível, mas o resumo automático não pôde ser produzido agora.</div>';
   }
 }
@@ -875,7 +905,7 @@ function renderPlanTheme(theme, pdfUrl, open = false) {
   const content = found
     ? `${digest}${digest ? `<div class="official-excerpts-label">${evidenceCount || 'Até 3'} ${evidenceCount === 1 ? 'trecho oficial usado' : 'trechos oficiais usados'} na explicação</div>` : ''}${proposals.map((proposal, index) => renderPlanProposal(proposal, pdfUrl, index)).join('')}${proposals.length > 3 ? `<button class="secondary-button proposal-more-button" type="button" data-show-more-proposals>Ver mais 3 propostas</button>` : ''}`
     : '<div class="theme-not-found">Nenhum trecho com linguagem de proposta foi identificado automaticamente neste tema. Isso não comprova que o assunto esteja ausente do documento.</div>';
-  return `<details class="plan-theme ${found ? 'is-found' : 'is-missing'}" ${open ? 'open' : ''}><summary><span class="theme-status" aria-hidden="true">${found ? 'Encontrado' : 'Não identificado'}</span><span class="theme-title"><strong>${escapeHtml(theme.label)}</strong><small>${found ? `${proposals.length} ${proposals.length === 1 ? 'proposta' : 'propostas'} · ${escapeHtml(pageLabel)}` : 'sem proposta classificada'}</small></span><span class="theme-expand" aria-hidden="true">+</span></summary><div class="theme-content">${content}</div></details>`;
+  return `<details class="plan-theme ${found ? 'is-found' : 'is-missing'}" data-plan-theme="${escapeHtml(theme.id)}" ${open ? 'open' : ''}><summary><span class="theme-status" aria-hidden="true">${found ? 'Encontrado' : 'Não identificado'}</span><span class="theme-title"><strong>${escapeHtml(theme.label)}</strong><small>${found ? `${proposals.length} ${proposals.length === 1 ? 'proposta' : 'propostas'} · ${escapeHtml(pageLabel)}` : 'sem proposta classificada'}</small></span><span class="theme-expand" aria-hidden="true">+</span></summary><div class="theme-content">${content}</div></details>`;
 }
 
 function renderThemeDigest(digest, pdfUrl) {
