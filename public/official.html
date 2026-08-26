@@ -161,6 +161,11 @@
           <button id="clearComparison" class="text-button" type="button">Limpar comparação</button>
         </div>
         <p class="section-intro">Além do registro eleitoral, a comparação mostra planos de governo publicados pelo TSE e até três leis ou projetos com autoria confirmada nas fontes legislativas, sem atribuição por semelhança de nome.</p>
+        <div class="share-comparison-controls">
+          <label>Tema do card<select id="shareComparisonTheme"><option value="GERAL">Visão geral</option><option value="educacao">Educação</option><option value="emprego-e-economia">Emprego e economia</option><option value="tecnologia-e-inovacao">Tecnologia e inovação</option><option value="gestao-e-transparencia">Gestão e transparência</option><option value="saude">Saúde</option><option value="mobilidade-e-infraestrutura">Mobilidade e infraestrutura</option><option value="protecao-social">Proteção social</option><option value="cultura-esporte-e-turismo">Cultura, esporte e turismo</option><option value="seguranca-publica-e-combate-ao-crime-organizado">Segurança pública</option></select></label>
+          <button id="shareComparisonImage" class="secondary-button" type="button" disabled>Compartilhar comparação como imagem</button>
+          <p id="shareComparisonStatus" role="status"></p>
+        </div>
         <p class="mobile-scroll-hint">Deslize a tabela para os lados para comparar todos os campos.</p>
         <div id="comparisonContent" class="comparison-content"></div>
       </div>
@@ -193,7 +198,7 @@
   </main>
 
   <dialog id="candidateDialog" class="candidate-dialog" aria-label="Detalhes da candidatura">
-    <button class="dialog-close" type="button" data-close-dialog aria-label="Fechar">×</button>
+    <button class="dialog-close dialog-back" type="button" data-close-dialog aria-label="Voltar para candidaturas">← <span>Voltar</span></button>
     <div id="candidateDetail"></div>
   </dialog>
 

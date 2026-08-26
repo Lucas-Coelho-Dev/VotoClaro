@@ -9,6 +9,7 @@
     "codespaces:bootstrap": "node scripts/bootstrap-codespaces.js",
     "sync": "node scripts/sync-official-data.js",
     "sync:photos": "node scripts/sync-photos.js",
+    "sync:asset-history": "node scripts/sync-asset-history.js",
     "worker:sync": "node scripts/run-sync-worker.js",
     "worker:ai": "node scripts/run-ai-worker.js",
     "monitor": "node scripts/run-monitor.js",
@@ -16,7 +17,7 @@
     "db:migrate": "node scripts/migrate.js",
     "db:import-photos": "node scripts/import-photo-cache.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/app.js && node --check src/safe-log.js && node --check src/install-safe-console.js && node --check src/operational-monitor.js && node --check src/parties.js && node --check src/persistence.js && node --check src/official-sync.js && node --check src/ranged-download.js && node --check src/photo-sync.js && node --check src/sources.js && node --check src/geography.js && node --check src/government-plans.js && node --check src/plan-summary.js && node --check src/local-llm.js && node --check src/plan-llm-analysis.js && node --check src/legislative.js && node --check src/integrity.js && node --check scripts/bootstrap-codespaces.js && node --check scripts/import-photo-cache.js && node --check scripts/run-sync-worker.js && node --check scripts/run-ai-worker.js && node --check scripts/run-monitor.js && node --check scripts/prepare-production.js && node --check public/geolocation.js && node --check public/official.js"
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/safe-log.js && node --check src/install-safe-console.js && node --check src/operational-monitor.js && node --check src/parties.js && node --check src/persistence.js && node --check src/official-sync.js && node --check src/ranged-download.js && node --check src/photo-sync.js && node --check src/sources.js && node --check src/geography.js && node --check src/government-plans.js && node --check src/plan-summary.js && node --check src/local-llm.js && node --check src/plan-llm-analysis.js && node --check src/legislative.js && node --check src/integrity.js && node --check src/asset-history.js && node --check src/document-qa.js && node --check scripts/bootstrap-codespaces.js && node --check scripts/import-photo-cache.js && node --check scripts/sync-asset-history.js && node --check scripts/run-sync-worker.js && node --check scripts/run-ai-worker.js && node --check scripts/run-monitor.js && node --check scripts/prepare-production.js && node --check public/geolocation.js && node --check public/official.js"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
@@ -27,6 +28,7 @@
     "helmet": "^8.3.0",
     "pdfjs-dist": "5.5.207",
     "pg": "^8.23.0",
+    "qrcode": "^1.5.4",
     "zod": "^4.4.3"
   },
   "engines": {

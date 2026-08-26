@@ -66,8 +66,9 @@ async function downloadArchive(unit, config) {
 }
 
 class GovernmentPlanService {
-  constructor(config) {
+  constructor(config, store = null) {
     this.config = config;
+    this.store = store;
     this.directory = path.join(config.dataDir, 'government-plans');
     this.cache = new Map();
     this.pending = new Map();
@@ -130,7 +131,7 @@ class GovernmentPlanService {
     if (!entry || entry.header.size > MAX_PLAN_BYTES) return null;
     const buffer = entry.getData();
     if (buffer.length > MAX_PLAN_BYTES || buffer.subarray(0, 4).toString('ascii') !== '%PDF') return null;
-    return {
+    const result = {
       buffer,
       contentType: 'application/pdf',
       filename: path.basename(entry.entryName),
@@ -142,6 +143,12 @@ class GovernmentPlanService {
         confidence: 'OFFICIAL',
       },
     };
+    await this.store?.recordGovernmentPlanDocument?.(candidate.id, {
+      sha256: result.sha256,
+      filename: result.filename,
+      sourceUrl: result.source.archiveUrl,
+    }).catch(() => {});
+    return result;
   }
 }
 

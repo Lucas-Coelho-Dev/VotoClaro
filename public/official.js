@@ -31,6 +31,8 @@ const state = {
   hasSearched: false,
   sessionViewIds: new Set(),
   sessionViewsLoaded: false,
+  comparisonEvidence: null,
+  activeCandidateId: null,
 };
 
 const CANDIDATE_VIEW_SESSION_KEY = 'votoclaro_candidate_views_v1';
@@ -114,6 +116,9 @@ function cacheElements() {
     sourceAlerts: byId('sourceAlerts'),
     syncRuns: byId('syncRuns'),
     changesList: byId('changesList'),
+    shareComparisonTheme: byId('shareComparisonTheme'),
+    shareComparisonImage: byId('shareComparisonImage'),
+    shareComparisonStatus: byId('shareComparisonStatus'),
   });
 }
 
@@ -142,10 +147,9 @@ function bindEvents() {
   byId('clearComparison').addEventListener('click', () => { state.compareIds = []; updateCompareCount(); renderComparison(); renderCandidates(); });
   byId('clearColinha').addEventListener('click', clearColinha);
   byId('copyColinha').addEventListener('click', copyColinha);
-  document.querySelector('[data-close-dialog]').addEventListener('click', () => elements.candidateDialog.close());
-  elements.candidateDialog.addEventListener('click', (event) => {
-    if (event.target === elements.candidateDialog) elements.candidateDialog.close();
-  });
+  byId('shareComparisonImage').addEventListener('click', shareComparisonImage);
+  document.querySelector('[data-close-dialog]').addEventListener('click', closeCandidate);
+  window.addEventListener('popstate', synchronizeCandidateRoute);
   elements.candidateGrid.addEventListener('click', handleCandidateAction);
   elements.popularGrid.addEventListener('click', handleCandidateAction);
   elements.candidateDetail.addEventListener('click', handleCandidateAction);
@@ -509,15 +513,27 @@ function handleCandidateAction(event) {
   if (colinha) return addToColinhaById(colinha.dataset.colinhaCandidate);
   const governmentPlan = event.target.closest('[data-load-government-plan]');
   if (governmentPlan) return loadGovernmentPlan(governmentPlan.dataset.loadGovernmentPlan);
+  const question = event.target.closest('[data-question-suggestion]');
+  if (question) {
+    const input = byId('officialQuestionInput');
+    if (input) { input.value = question.dataset.questionSuggestion; input.focus(); }
+  }
 }
 
-async function openCandidate(id) {
+async function openCandidate(id, options = {}) {
+  const updateUrl = options.updateUrl !== false;
+  state.activeCandidateId = String(id);
   elements.candidateDetail.innerHTML = '<div class="detail-body"><div class="skeleton"></div></div>';
-  elements.candidateDialog.showModal();
+  if (!elements.candidateDialog.open) elements.candidateDialog.showModal();
+  if (updateUrl && window.location.pathname !== `/candidato/${encodeURIComponent(id)}`) {
+    history.pushState({ candidateId: String(id) }, '', `/candidato/${encodeURIComponent(id)}`);
+  }
   try {
     const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}`);
     state.candidateCache.set(id, payload.data);
     renderCandidateDetail(payload.data, payload.snapshot);
+    loadAssetHistory(id);
+    loadCandidateHistory(id);
     loadIntegrity(id);
     if (payload.data.legislative) loadLegislative(id);
     registerCandidateView(id);
@@ -595,8 +611,8 @@ function renderCandidateDetail(candidate, snapshot) {
     ? `<section class="detail-section"><h3>Plano de governo</h3><div id="governmentPlanData"><div class="not-published"><strong>Documento entregue ao TSE.</strong><br>O vínculo usa o identificador oficial desta candidatura.<br><button class="secondary-button" type="button" data-load-government-plan="${escapeHtml(candidate.id)}">Ver resumo e plano oficial</button></div></div></section>`
     : `<section class="detail-section"><h3>Plano de governo</h3><div class="not-published"><strong>Este cargo não entrega plano de governo individual nesse conjunto do TSE.</strong><br>Planos de governo são publicados para presidente e governador. Para cargos legislativos, o histórico verificável de normas aparece abaixo quando há vínculo oficial exato.</div></section>`;
   const legislativeHistory = candidate.legislative
-    ? '<section class="detail-section"><h3>Leis e projetos com autoria confirmada</h3><div id="legislativeData"><div class="mini-loading">Confirmando autoria, projetos e normas nas fontes legislativas oficiais…</div></div></section>'
-    : '<section class="detail-section"><h3>Leis e projetos com autoria confirmada</h3><div class="not-published">Não há correspondência exata com um mandato parlamentar em exercício nas listas atuais da Câmara ou do Senado. Por segurança, nenhum projeto ou norma é atribuído apenas por semelhança de nome.</div></section>';
+    ? '<section class="detail-section"><h3>Painel do mandato anterior</h3><div id="legislativeData"><div class="mini-loading">Confirmando atuação, despesas, projetos e normas nas fontes legislativas oficiais…</div></div></section>'
+    : '<section class="detail-section"><h3>Painel do mandato anterior</h3><div class="not-published">Não há correspondência exata com um mandato parlamentar em exercício nas listas atuais da Câmara ou do Senado. Por segurança, nenhum projeto, voto, despesa ou norma é atribuído apenas por semelhança de nome.</div></section>';
   const ticketEligible = ['PRESIDENTE', 'GOVERNADOR', 'SENADOR'].includes(String(candidate.office || '').toUpperCase());
   const runningMates = Array.isArray(candidate.runningMates) ? candidate.runningMates : [];
   const ticket = ticketEligible
@@ -619,15 +635,61 @@ function renderCandidateDetail(candidate, snapshot) {
         ${optionalFact('Ocupação', candidate.occupation)}${optionalFact('Escolaridade', candidate.education)}${fact('Faixa ideológica do partido', partyIdeologyLabel(candidate, true))}
       </div><p class="method-note ideology-method-note">A faixa ideológica se refere ao partido na pesquisa acadêmica, não à posição individual da pessoa candidata. <a href="/methodology.html#ideologia-partidaria">Ver fonte, limites e ressalvas</a>.</p></section>
       ${ticket}
-      <section class="detail-section"><h3>Bens declarados</h3>${assets}</section>
+      <section class="detail-section"><h3>Evolução patrimonial declarada</h3>${assets}<div id="assetHistoryData"><div class="mini-loading">Cruzando eleições anteriores pelo identificador oficial protegido…</div></div></section>
       <section class="detail-section"><h3>Financiamento da campanha</h3>${finance}</section>
       ${governmentPlan}
       ${legislativeHistory}
+      <section class="detail-section official-question-section"><h3>Pergunte aos documentos oficiais</h3><p class="method-note">A IA recebe somente trechos do plano oficial e itens legislativos com vínculo confirmado. Ela não pesquisa opinião, notícia ou internet aberta.</p><div class="question-suggestions"><button type="button" data-question-suggestion="O que esta candidatura propõe para educação?">Propostas para educação</button><button type="button" data-question-suggestion="O documento explica como financiar as propostas?">Como pretende financiar?</button><button type="button" data-question-suggestion="Quais leis desta pessoa podem afetar trabalhadores e o que a fonte confirma?">Leis que afetam trabalhadores</button></div><form id="officialQuestionForm" data-official-question-form data-candidate-id="${escapeHtml(candidate.id)}"><label for="officialQuestionInput">Sua pergunta</label><div class="official-question-input"><input id="officialQuestionInput" name="question" minlength="10" maxlength="240" required placeholder="Ex.: em quais páginas fala de saúde?"><button class="primary-button" type="submit">Perguntar</button></div></form><div id="officialQuestionResult" aria-live="polite"></div></section>
+      <section class="detail-section"><h3>O que mudou?</h3><div id="candidateHistoryData"><div class="mini-loading">Comparando versões oficiais importadas…</div></div></section>
       <section class="detail-section"><h3>Fiscalização, dinheiro público e integridade</h3><div id="integrityData"><div class="mini-loading">Consultando TCU, TSE e fontes oficiais de transparência…</div></div></section>
       <section class="detail-section"><h3>Redes sociais declaradas</h3>${social}</section>
       <section class="detail-section"><h3>Proveniência</h3><div class="source-list">${sources}</div><p class="muted">Checksum da importação: ${escapeHtml(snapshot.checksum)}</p></section>
     </div>`;
   bindImageFallbacks(elements.candidateDetail);
+}
+
+async function loadAssetHistory(id) {
+  const container = byId('assetHistoryData');
+  if (!container) return;
+  try {
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/assets/history`);
+    const history = payload.data;
+    const rows = history.elections.map((election) => {
+      const change = election.changeFromPrevious;
+      const changeText = !change ? 'Primeira eleição localizada' : `${change.absolute >= 0 ? '+' : '−'} ${formatCurrency(Math.abs(change.absolute))}${change.percentage === null ? '' : ` (${change.percentage >= 0 ? '+' : ''}${change.percentage.toFixed(1).replace('.', ',')}%)`} desde ${change.previousYear}`;
+      const composition = election.composition.slice(0, 5).map((item) => `<li><span>${escapeHtml(item.category)} · ${formatNumber(item.count)} ${item.count === 1 ? 'item' : 'itens'}</span><strong>${formatCurrency(item.value)}</strong></li>`).join('');
+      return `<article class="asset-history-card"><div><span>ELEIÇÃO ${election.year}</span><strong>${formatCurrency(election.total)}</strong><small>${escapeHtml(changeText)}</small></div><ul>${composition || '<li>Nenhum item publicado nesta eleição.</li>'}</ul><a class="inline-link" href="${escapeHtml(election.source.url)}" target="_blank" rel="noopener noreferrer">Conferir no TSE ↗</a></article>`;
+    }).join('');
+    container.innerHTML = `<div class="asset-history-grid">${rows}</div><div class="asset-caveats"><strong>Contexto obrigatório</strong>${history.caveats.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}<small>${escapeHtml(history.matching)}</small></div>`;
+  } catch {
+    container.innerHTML = '<div class="not-published">O histórico de eleições anteriores não respondeu agora. A declaração atual acima permanece disponível.</div>';
+  }
+}
+
+async function loadCandidateHistory(id) {
+  const container = byId('candidateHistoryData');
+  if (!container) return;
+  try {
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/history`);
+    if (!payload.data.length) {
+      container.innerHTML = `<div class="not-published"><strong>Nenhuma mudança registrada nas versões preservadas.</strong><br>${escapeHtml(payload.note)}</div>`;
+      return;
+    }
+    container.innerHTML = `<div class="candidate-change-list">${payload.data.map((event) => `<article><time>${formatDate(event.detectedAt)}</time><div><strong>${escapeHtml(event.label || event.type)}</strong>${event.before !== undefined || event.after !== undefined ? `<p>${escapeHtml(historyValue(event.before))} → ${escapeHtml(historyValue(event.after))}</p>` : ''}${event.resolutionNote ? `<p>${escapeHtml(event.resolutionNote)}</p>` : ''}<small>${escapeHtml(event.source || '')}</small></div></article>`).join('')}</div><p class="method-note">${escapeHtml(payload.note)}</p>`;
+  } catch {
+    container.innerHTML = '<div class="not-published">Não foi possível comparar as versões preservadas agora.</div>';
+  }
+}
+
+function historyValue(value) {
+  if (value === null || value === undefined || value === '') return 'não publicado';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'nenhum integrante publicado';
+  if (typeof value === 'object') {
+    if ('totalRevenue' in value || 'totalExpense' in value) return `receitas ${formatCurrency(value.totalRevenue)}; despesas ${formatCurrency(value.totalExpense)}`;
+    return 'registro atualizado';
+  }
+  if (typeof value === 'number') return formatCurrency(value);
+  return String(value);
 }
 
 async function loadIntegrity(id, { forceRefresh = false } = {}) {
@@ -713,7 +775,7 @@ async function loadLegislative(id) {
   if (!container) return;
   container.innerHTML = '<div class="mini-loading">Confirmando autoria, projetos e normas nas fontes legislativas oficiais…</div>';
   try {
-    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative?v=legislative-profile-v3`);
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/legislative?v=legislative-profile-v4`);
     container.innerHTML = renderLegislativeContent(payload.data, false, id);
     clearTimeout(container.legislativePollTimer);
     if (payload.data?.laws?.some((law) => ['QUEUED', 'PROCESSING'].includes(law.plainLanguage?.status))) {
@@ -722,6 +784,23 @@ async function loadLegislative(id) {
   } catch {
     container.innerHTML = '<div class="not-published">A Câmara ou o Senado não respondeu agora. Nenhuma lei foi atribuída sem confirmação.</div>';
   }
+}
+
+function closeCandidate() {
+  state.activeCandidateId = null;
+  if (history.state?.directCandidate) window.location.assign('/');
+  else if (history.state?.candidateId || /^\/candidato\/\d+$/.test(window.location.pathname)) history.back();
+  else elements.candidateDialog.close();
+}
+
+function synchronizeCandidateRoute() {
+  const candidateId = window.location.pathname.match(/^\/candidato\/(\d+)$/)?.[1];
+  if (candidateId) {
+    if (state.activeCandidateId !== candidateId) openCandidate(candidateId, { updateUrl: false });
+    return;
+  }
+  state.activeCandidateId = null;
+  if (elements.candidateDialog.open) elements.candidateDialog.close();
 }
 
 function renderLegislativePlainLanguage(proposal) {
@@ -778,18 +857,36 @@ function proposalCard(proposal, candidateId = '') {
 }
 
 function renderLegislativeContent(data, includeExpenses = false, candidateId = '') {
-  const expenses = includeExpenses
+  const detailed = Boolean(candidateId) || includeExpenses;
+  const expenses = detailed
     ? (data.expenses
-      ? `<div class="fact"><span>Despesas consultadas em 2026</span><strong>${formatCurrency(data.expenses.totalShown)}</strong></div><div class="fact"><span>Registros considerados</span><strong>${formatNumber(data.expenses.recordsShown)}${data.expenses.partial ? ' — recorte parcial' : ''}</strong></div>`
+      ? `<div class="fact"><span>Despesas parlamentares no recorte</span><strong>${formatCurrency(data.expenses.totalShown)}</strong></div><div class="fact"><span>Registros de despesa considerados</span><strong>${formatNumber(data.expenses.recordsShown)}${data.expenses.partial ? ' — recorte parcial' : ''}</strong></div>`
       : '<div class="fact"><span>Despesas</span><strong>Não publicadas nesta consulta</strong></div>')
     : '';
-  const facts = includeExpenses
-    ? `<div class="fact-grid">${expenses}<div class="fact"><span>Casa legislativa</span><strong>${escapeHtml(data.chamber)}</strong></div></div>`
+  const activity = data.activity || {};
+  const facts = detailed
+    ? `<div class="fact-grid">${expenses}<div class="fact"><span>Casa legislativa</span><strong>${escapeHtml(data.chamber)}</strong></div><div class="fact"><span>Projetos retornados pela fonte</span><strong>${formatNumber(activity.projectsReturned)}${activity.projectsPartial ? ' — recorte parcial' : ''}</strong></div>${activity.officialEventParticipations === undefined ? '' : `<div class="fact"><span>Participações oficiais em eventos</span><strong>${formatNumber(activity.officialEventParticipations)}${activity.eventParticipationsPartial ? ' — recorte parcial' : ''}</strong></div>`}${activity.nominalVotesInspected === undefined ? '' : `<div class="fact"><span>Votos nominais localizados</span><strong>${formatNumber(activity.nominalVotesFound)} em ${formatNumber(activity.nominalVotesInspected)} votações recentes inspecionadas</strong></div>`}</div>`
+    : '';
+  const expenseCategories = detailed && data.expenses?.byCategory?.length
+    ? `<section class="mandate-subsection"><h4>Despesas por categoria</h4><div class="expense-category-list">${data.expenses.byCategory.slice(0, 8).map((item) => `<div><span>${escapeHtml(item.category)} · ${formatNumber(item.records)} ${item.records === 1 ? 'registro' : 'registros'}</span><strong>${formatCurrency(item.value)}</strong></div>`).join('')}</div><p class="method-note">Valores somados somente dentro dos registros retornados pela API; “recorte parcial” não representa o total anual completo.</p></section>`
+    : '';
+  const votes = detailed && activity.recentVotes?.length
+    ? `<section class="mandate-subsection"><h4>Como votou em votações nominais recentes</h4><div class="mandate-activity-list">${activity.recentVotes.map((vote) => `<article><time>${formatDate(vote.date, false)}</time><div><strong>Voto: ${escapeHtml(vote.vote || 'não informado')}</strong><p>${escapeHtml(vote.description)}</p><a class="inline-link" href="${escapeHtml(vote.officialUrl)}" target="_blank" rel="noopener noreferrer">Conferir votação oficial ↗</a></div></article>`).join('')}</div></section>`
+    : '';
+  const speeches = detailed && activity.speeches?.length
+    ? `<section class="mandate-subsection"><h4>Discursos recentes registrados</h4><div class="mandate-activity-list">${activity.speeches.slice(0, 5).map((speech) => `<article><time>${formatDate(speech.date, false)}</time><div><strong>${escapeHtml(speech.type || speech.phase || 'Discurso registrado')}</strong><p>${escapeHtml(speech.summary)}</p><a class="inline-link" href="${escapeHtml(speech.officialUrl)}" target="_blank" rel="noopener noreferrer">Conferir perfil oficial ↗</a></div></article>`).join('')}</div></section>`
+    : '';
+  const projectTypes = detailed && activity.projectsByType?.length
+    ? `<section class="mandate-subsection"><h4>Projetos apresentados no recorte</h4><div class="project-type-pills">${activity.projectsByType.map((item) => `<span>${escapeHtml(item.type)} · ${formatNumber(item.count)}</span>`).join('')}</div></section>`
+    : '';
+  const coverage = detailed && activity.attendanceNote ? `<p class="method-note">${escapeHtml(activity.attendanceNote)}</p>` : '';
+  const promiseComparison = detailed && data.promiseVsAction
+    ? `<section class="mandate-subsection promise-action"><h4>Promessa anterior × atuação real</h4><div class="not-published">${escapeHtml(data.promiseVsAction.message)}</div></section>`
     : '';
   const laws = data.laws?.length
-    ? `<div class="proposal-list">${data.laws.slice(0, 3).map((proposal) => proposalCard(proposal, candidateId)).join('')}</div>`
+    ? `<section class="mandate-subsection"><h4>Três leis ou projetos com autoria confirmada</h4><div class="proposal-list">${data.laws.slice(0, 3).map((proposal) => proposalCard(proposal, candidateId)).join('')}</div></section>`
     : '<div class="not-published"><strong>Nenhum projeto ou norma passou por todas as confirmações deste recorte.</strong><br>Isso não prova que a pessoa nunca participou de outra matéria: a consulta cobre somente as autorias retornadas para o mandato vinculado.</div>';
-  return `<div class="legislative-results">${facts}${data.note ? `<p class="muted">${escapeHtml(data.note)}</p>` : ''}<p class="method-note">${escapeHtml(data.methodology?.rule || 'Recorte de normas e autorias publicado pela Casa legislativa.')} ${escapeHtml(data.methodology?.impactRule || '')}</p>${laws}<p class="muted">Consultado em ${formatDate(data.source.fetchedAt)} · <a href="${escapeHtml(data.source.url)}" target="_blank" rel="noopener noreferrer">fonte oficial</a></p></div>`;
+  return `<div class="legislative-results">${facts}${coverage}${expenseCategories}${projectTypes}${votes}${speeches}${data.note ? `<p class="muted">${escapeHtml(data.note)}</p>` : ''}<p class="method-note">${escapeHtml(data.methodology?.rule || 'Recorte de normas e autorias publicado pela Casa legislativa.')} ${escapeHtml(data.methodology?.impactRule || '')}</p>${laws}${promiseComparison}<p class="muted">Consultado em ${formatDate(data.source.fetchedAt)} · <a href="${escapeHtml(data.source.url)}" target="_blank" rel="noopener noreferrer">fonte oficial</a></p></div>`;
 }
 
 async function loadGovernmentPlan(id) {
@@ -1007,6 +1104,8 @@ function toggleComparison(id) {
 function updateCompareCount() { elements.compareCount.textContent = state.compareIds.length; }
 
 async function renderComparison() {
+  state.comparisonEvidence = null;
+  elements.shareComparisonImage.disabled = true;
   if (state.compareIds.length !== 2) {
     elements.comparisonContent.innerHTML = '<div class="compare-empty"><strong>Selecione duas candidaturas</strong><p>Use o botão “Comparar” nos cartões. Só exibimos campos publicados pelas fontes.</p></div>';
     return;
@@ -1056,7 +1155,7 @@ async function candidateEvidence(candidate) {
       ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/government-plan/summary?v=local-llm-v16`)
       : Promise.resolve(null),
     candidate.legislative
-      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative?v=legislative-profile-v3`)
+      ? requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/legislative?v=legislative-profile-v4`)
       : Promise.resolve(null),
     requestJson(`/api/v1/candidates/${encodeURIComponent(candidate.id)}/integrity`),
   ]);
@@ -1097,6 +1196,8 @@ async function renderComparisonEvidence(candidates, comparisonKey) {
   if (comparisonKey !== state.compareIds.join('|')) return;
   const container = byId('comparisonEvidence');
   if (!container) return;
+  state.comparisonEvidence = { candidates, results };
+  elements.shareComparisonImage.disabled = false;
   container.innerHTML = `<div class="evidence-intro"><strong>Mesmos critérios, fontes oficiais preservadas</strong><p>Os planos são classificados nos mesmos nove temas — incluindo segurança pública e combate ao crime organizado — e cada trecho mantém página e seção de origem. “Não identificado” não significa ausência de proposta. Decisões do TCU, sanções administrativas e valores declarados aparecem pelo estágio publicado, sem nota, ranking ou presunção de culpa.</p></div><div class="compare-evidence-grid">${candidates.map((candidate, index) => comparisonEvidenceColumn(candidate, results[index])).join('')}</div>`;
 }
 
@@ -1127,7 +1228,7 @@ async function addToColinhaById(id) {
   if (colinha[slot] && !window.confirm(`Substituir ${colinha[slot].ballotName} por ${candidate.ballotName}?`)) return;
   colinha[slot] = { id: candidate.id, ballotName: candidate.ballotName, ballotNumber: candidate.ballotNumber, party: candidate.party, partyName: candidate.partyName, partyNumber: candidate.partyNumber, office: candidate.office };
   saveColinha(colinha);
-  if (elements.candidateDialog.open) elements.candidateDialog.close();
+  if (elements.candidateDialog.open) closeCandidate();
 }
 function removeColinhaSlot(slot) { const colinha = readColinha(); delete colinha[slot]; saveColinha(colinha); }
 function clearColinha() { if (window.confirm('Apagar todas as escolhas salvas somente neste navegador?')) saveColinha({}); }
@@ -1197,7 +1298,103 @@ function renderColinha() {
   byId('continueColinha').textContent = complete ? 'Revisar colinha' : 'Continuar minha colinha';
 }
 
+function comparisonShareText(candidate, evidence, themeId) {
+  const summary = evidence?.planSummary;
+  if (themeId === 'GERAL') {
+    return summary?.candidateObjective?.summary || summary?.overview || 'A fonte oficial consultada não trouxe uma visão geral pronta para este card.';
+  }
+  const theme = summary?.themeSummaries?.find((item) => item.id === themeId);
+  return theme?.digest?.summary || theme?.proposals?.[0]?.summary || theme?.proposals?.[0]?.text || 'Nenhum trecho de proposta foi identificado automaticamente neste tema.';
+}
+
+function canvasWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines) {
+  const words = String(text || '').split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (context.measureText(candidate).width <= maxWidth) line = candidate;
+    else { if (line) lines.push(line); line = word; }
+    if (lines.length === maxLines) break;
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  if (words.length && lines.join(' ').length < String(text).length - 5) lines[lines.length - 1] = `${lines[lines.length - 1].replace(/[.,;:]?$/, '')}…`;
+  lines.forEach((item, index) => context.fillText(item, x, y + index * lineHeight));
+  return y + lines.length * lineHeight;
+}
+
+async function imageFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+async function shareComparisonImage() {
+  const prepared = state.comparisonEvidence;
+  if (!prepared || prepared.candidates.length !== 2) return;
+  const status = elements.shareComparisonStatus;
+  const themeId = elements.shareComparisonTheme.value;
+  const themeLabel = elements.shareComparisonTheme.selectedOptions[0].textContent;
+  status.textContent = 'Gerando imagem com fonte, data e acesso direto…';
+  elements.shareComparisonImage.disabled = true;
+  try {
+    const sharePath = `/comparar?candidatos=${prepared.candidates.map((candidate) => encodeURIComponent(candidate.id)).join(',')}&tema=${encodeURIComponent(themeId)}`;
+    const canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1350;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#f3f7fb'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#0b2942'; context.fillRect(0, 0, canvas.width, 190);
+    context.fillStyle = '#ffffff'; context.font = '800 54px Arial'; context.fillText('VotoClaro', 64, 83);
+    context.font = '500 26px Arial'; context.fillText('COMPARE. CONFIRA. DECIDA.', 64, 132);
+    context.fillStyle = '#1263df'; context.fillRect(64, 225, 952, 6);
+    context.fillStyle = '#0b2942'; context.font = '800 36px Arial'; context.fillText(`Tema: ${themeLabel}`, 64, 292);
+    context.font = '500 22px Arial'; context.fillStyle = '#557086'; context.fillText(`Atualizado em ${formatDate(new Date().toISOString())}`, 64, 330);
+    prepared.candidates.forEach((candidate, index) => {
+      const x = 64 + index * 494;
+      const y = 385;
+      context.fillStyle = '#ffffff'; context.fillRect(x, y, 458, 650);
+      context.strokeStyle = '#c9d8e5'; context.lineWidth = 2; context.strokeRect(x, y, 458, 650);
+      context.fillStyle = index === 0 ? '#1263df' : '#087a4b'; context.fillRect(x, y, 458, 12);
+      context.fillStyle = '#0b2942'; context.font = '800 33px Arial';
+      let nextY = canvasWrappedText(context, candidate.ballotName, x + 28, y + 75, 402, 39, 2);
+      context.fillStyle = '#557086'; context.font = '600 22px Arial'; context.fillText(`${candidate.party} · ${candidate.office}`, x + 28, nextY + 18);
+      context.fillStyle = '#0b2942'; context.font = '500 25px Arial';
+      canvasWrappedText(context, comparisonShareText(candidate, prepared.results[index], themeId), x + 28, nextY + 78, 402, 35, 12);
+      context.fillStyle = '#e9f1fa'; context.fillRect(x + 28, y + 568, 402, 54);
+      context.fillStyle = '#0b2942'; context.font = '700 20px Arial'; context.fillText('Resumo automático — confira as fontes', x + 44, y + 602);
+    });
+    const qr = await imageFromUrl(`/api/v1/share/qr.svg?path=${encodeURIComponent(sharePath)}`);
+    context.drawImage(qr, 64, 1080, 180, 180);
+    context.fillStyle = '#0b2942'; context.font = '800 28px Arial'; context.fillText('Abra a comparação completa', 280, 1140);
+    context.fillStyle = '#557086'; context.font = '500 22px Arial';
+    canvasWrappedText(context, 'Escaneie o QR Code para ler os trechos oficiais, páginas do PDF e metodologia.', 280, 1182, 720, 30, 3);
+    context.fillStyle = '#0b2942'; context.font = '700 20px Arial'; context.fillText('VotoClaro™ · projeto independente · confira as fontes oficiais', 64, 1310);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 0.94));
+    const file = new File([blob], `votoclaro-comparacao-${themeId.toLowerCase()}.png`, { type: 'image/png' });
+    const shareUrl = new URL(sharePath, window.location.origin).toString();
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: `Comparação VotoClaro — ${themeLabel}`, text: 'Compare e confira as fontes oficiais.', url: shareUrl });
+      status.textContent = 'Imagem compartilhada.';
+    } else {
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob); link.download = file.name; link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      status.textContent = 'Imagem salva. Você já pode enviá-la pelo WhatsApp ou Instagram.';
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError') status.textContent = 'Não foi possível gerar o card agora. Tente novamente.';
+  } finally {
+    elements.shareComparisonImage.disabled = false;
+  }
+}
+
 async function handleAnalysisReportSubmit(event) {
+  const officialQuestionForm = event.target.closest('[data-official-question-form]');
+  if (officialQuestionForm) return handleOfficialQuestionSubmit(event, officialQuestionForm);
   const form = event.target.closest('[data-analysis-report-form]');
   if (!form) return;
   event.preventDefault();
@@ -1218,6 +1415,31 @@ async function handleAnalysisReportSubmit(event) {
     form.querySelector('textarea').value = '';
   } catch (error) {
     result.textContent = error.message || 'Não foi possível enviar o relato agora.';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleOfficialQuestionSubmit(event, form) {
+  event.preventDefault();
+  const result = byId('officialQuestionResult');
+  const button = form.querySelector('button[type="submit"]');
+  const question = String(new FormData(form).get('question') || '').trim();
+  result.innerHTML = '<div class="mini-loading">Localizando trechos e preparando uma resposta limitada às fontes…</div>';
+  button.disabled = true;
+  try {
+    const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(form.dataset.candidateId)}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    const data = payload.data;
+    const citations = data.citations?.length
+      ? `<div class="official-answer-sources"><strong>Fontes usadas</strong>${data.citations.map((citation) => `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(citation.label)} ↗</a>`).join('')}</div>`
+      : '';
+    result.innerHTML = `<article class="official-answer ${data.notFound ? 'is-not-found' : ''}"><span>${data.generatedBy === 'LOCAL_LLM_GROUNDED' ? 'RESPOSTA DA IA LOCAL · RESTRITA ÀS FONTES' : 'BUSCA NAS FONTES OFICIAIS'}</span><p>${escapeHtml(data.answer)}</p>${citations}<small>${escapeHtml(payload.policy || '')}</small></article>`;
+  } catch (error) {
+    result.innerHTML = `<div class="not-published">${escapeHtml(error.message || 'A IA local não respondeu agora. As fontes acima continuam disponíveis.')}</div>`;
   } finally {
     button.disabled = false;
   }
@@ -1270,7 +1492,22 @@ async function initialize() {
   renderSkeletons();
   await loadHealth();
   await Promise.all([loadFilters(), loadCandidates(), loadPopularCandidates()]);
-  if (new URLSearchParams(window.location.search).get('nova-colinha') === '1') {
+  const params = new URLSearchParams(window.location.search);
+  const directCandidateId = window.location.pathname.match(/^\/candidato\/(\d+)$/)?.[1];
+  if (directCandidateId) {
+    history.replaceState({ candidateId: directCandidateId, directCandidate: true }, '', window.location.href);
+    await openCandidate(directCandidateId, { updateUrl: false });
+  }
+  if (window.location.pathname === '/comparar') {
+    const candidateIds = String(params.get('candidatos') || '').split(',').filter((id) => /^\d{1,32}$/.test(id)).slice(0, 2);
+    if (candidateIds.length === 2) {
+      state.compareIds = candidateIds;
+      updateCompareCount();
+      if ([...elements.shareComparisonTheme.options].some((option) => option.value === params.get('tema'))) elements.shareComparisonTheme.value = params.get('tema');
+      switchView('compare');
+    }
+  }
+  if (params.get('nova-colinha') === '1') {
     showNotice('Você recebeu uma colinha. Pesquise suas candidaturas e monte a sua — as escolhas ficam somente neste navegador.');
   }
 }

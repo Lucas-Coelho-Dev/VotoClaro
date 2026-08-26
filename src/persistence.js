@@ -2,6 +2,32 @@ const fs = require('fs/promises');
 const path = require('path');
 const { Pool } = require('pg');
 
+function candidateChangeEvents(snapshots, candidateId) {
+  const events = [];
+  let previous = null;
+  for (const snapshot of snapshots) {
+    const current = snapshot?.payload?.candidates?.find((candidate) => String(candidate.id) === String(candidateId));
+    if (!current) continue;
+    const detectedAt = snapshot.importedAt || snapshot.payload?.meta?.importedAt || null;
+    if (previous) {
+      const changes = [];
+      const add = (type, label, before, after) => {
+        if (JSON.stringify(before ?? null) !== JSON.stringify(after ?? null)) changes.push({ type, label, before: before ?? null, after: after ?? null });
+      };
+      add('REGISTRATION', 'Situação da candidatura', previous.status, current.status);
+      add('REGISTRATION_DETAIL', 'Detalhe da situação', previous.statusDetail, current.statusDetail);
+      add('PARTY', 'Partido', [previous.party, previous.partyName].filter(Boolean).join(' — '), [current.party, current.partyName].filter(Boolean).join(' — '));
+      add('PHOTO', 'Foto oficial', Boolean(previous.photoUrl), Boolean(current.photoUrl));
+      add('ASSETS', 'Total de bens declarados', Number(previous.assetTotal) || 0, Number(current.assetTotal) || 0);
+      add('CAMPAIGN_FINANCE', 'Prestação de contas', previous.finance || null, current.finance || null);
+      add('TICKET', 'Composição da chapa', (previous.runningMates || []).map((item) => `${item.id}:${item.status}`), (current.runningMates || []).map((item) => `${item.id}:${item.status}`));
+      for (const change of changes) events.push({ ...change, detectedAt, source: 'TSE — publicação oficial importada' });
+    }
+    previous = current;
+  }
+  return events.reverse();
+}
+
 class SnapshotStore {
   constructor(config) {
     this.config = config;
@@ -147,6 +173,18 @@ class SnapshotStore {
       CREATE INDEX IF NOT EXISTS government_plan_analyses_status_idx
         ON government_plan_analyses (status, updated_at);
 
+      CREATE TABLE IF NOT EXISTS government_plan_documents (
+        candidate_id TEXT NOT NULL,
+        document_sha256 TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (candidate_id, document_sha256)
+      );
+      CREATE INDEX IF NOT EXISTS government_plan_documents_candidate_idx
+        ON government_plan_documents (candidate_id, first_seen_at DESC);
+
       CREATE TABLE IF NOT EXISTS legislative_profile_cache (
         chamber TEXT NOT NULL,
         member_id TEXT NOT NULL,
@@ -199,6 +237,64 @@ class SnapshotStore {
 
   getRuns() {
     return this.runs.slice(0, 30);
+  }
+
+  async getCandidateHistory(candidateId) {
+    if (this.pool) {
+      const result = await this.pool.query(
+        `SELECT imported_at AS "importedAt", payload
+         FROM data_snapshots
+         ORDER BY imported_at ASC, id ASC`,
+      );
+      return candidateChangeEvents(result.rows, candidateId);
+    }
+    const changes = (this.latest?.changes || []).filter((change) => String(change.candidateId || change.id || '') === String(candidateId));
+    return changes.map((change) => ({ ...change, detectedAt: this.latest?.meta?.importedAt || null, source: 'TSE — publicação oficial importada' }));
+  }
+
+  async getResolvedCandidateCorrections(candidateId) {
+    if (this.pool) {
+      const result = await this.pool.query(
+        `SELECT subject_type AS "subjectType", category, page_number AS "pageNumber",
+                resolution_note AS "resolutionNote", updated_at AS "updatedAt"
+         FROM analysis_reports
+         WHERE candidate_id = $1 AND status = 'RESOLVED'
+         ORDER BY updated_at DESC LIMIT 20`,
+        [String(candidateId)],
+      );
+      return result.rows;
+    }
+    return [...this.analysisReports.values()]
+      .filter((report) => String(report.candidateId) === String(candidateId) && report.status === 'RESOLVED')
+      .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))
+      .slice(0, 20)
+      .map(({ subjectType, category, pageNumber, resolutionNote, updatedAt }) => ({ subjectType, category, pageNumber, resolutionNote, updatedAt }));
+  }
+
+  async recordGovernmentPlanDocument(candidateId, document) {
+    if (!this.pool) return;
+    await this.pool.query(
+      `INSERT INTO government_plan_documents (candidate_id, document_sha256, filename, source_url)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (candidate_id, document_sha256) DO UPDATE SET
+         filename = EXCLUDED.filename,
+         source_url = EXCLUDED.source_url,
+         last_seen_at = NOW()`,
+      [String(candidateId), String(document.sha256), String(document.filename), String(document.sourceUrl)],
+    );
+  }
+
+  async getGovernmentPlanDocuments(candidateId) {
+    if (!this.pool) return [];
+    const result = await this.pool.query(
+      `SELECT document_sha256 AS "sha256", filename, source_url AS "sourceUrl",
+              first_seen_at AS "firstSeenAt", last_seen_at AS "lastSeenAt"
+       FROM government_plan_documents
+       WHERE candidate_id = $1
+       ORDER BY first_seen_at DESC`,
+      [String(candidateId)],
+    );
+    return result.rows;
   }
 
   async refreshSnapshot() {

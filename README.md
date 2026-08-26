@@ -22,6 +22,10 @@ Portal de transparência eleitoral que importa publicações oficiais, preserva 
 - PDFs de plano de governo recebem leitura automática em nove temas fixos — incluindo segurança pública e combate ao crime organizado. A leitura determinística percorre o documento, seleciona trechos representativos e a IA local explica o objetivo central e até três prioridades, sempre com página e citação validadas. Os demais trechos continuam visíveis sem reescrita.
 - A página inicial mostra até seis candidaturas mais consultadas por contagem agregada, sem tratar popularidade como apoio ou recomendação; a faixa some ao iniciar uma busca.
 - CPF do visitante, endereço e preferência eleitoral não são armazenados no servidor. O CPF público da candidatura é usado somente em memória para consultas oficiais exatas e nunca entra no snapshot, banco público, logs ou navegador.
+- A evolução patrimonial cruza eleições anteriores por CPF exato somente em memória, publica totais e composição sem o identificador pessoal e explica que valor declarado pode ser de aquisição e que crescimento isolado não comprova irregularidade.
+- A ficha da candidatura possui endereço próprio, histórico “O que mudou?”, painel de atuação parlamentar e retorno à busca sem perder filtros.
+- Comparações podem ser compartilhadas em imagem com data, marca, QR Code, link direto e convite para conferir as fontes.
+- “Pergunte aos documentos oficiais” usa a IA local somente sobre trechos recuperados do PDF do TSE e registros legislativos confirmados; toda resposta afirmativa exige citações válidas.
 
 ## Executar localmente
 
@@ -50,6 +54,12 @@ Para atualizar somente as fotos oficiais, mantendo o snapshot eleitoral atual:
 npm run sync:photos
 ```
 
+Para atualizar o histórico patrimonial de 2018 e 2022 por correspondência oficial exata:
+
+```bash
+npm run sync:asset-history
+```
+
 Sem `DATABASE_URL`, somente dados públicos são armazenados em `data/latest.json`. Essa opção é apropriada para desenvolvimento. Em produção, configure PostgreSQL.
 
 ### IA local para planos de governo
@@ -70,12 +80,16 @@ O sistema extrativo continua sendo o fallback imediato. A IA recebe somente um c
 | `GET /api/v1/geography/states` | Malhas oficiais das UFs, sem receber coordenadas |
 | `GET /api/v1/candidates` | Busca paginada de candidaturas |
 | `GET /api/v1/candidates/:id` | Registro completo com proveniência |
+| `GET /api/v1/candidates/:id/assets/history` | Evolução patrimonial declarada, composição e ressalvas |
+| `GET /api/v1/candidates/:id/history` | Mudanças específicas da candidatura entre versões preservadas |
 | `POST /api/v1/candidates/:id/view` | Soma uma abertura agregada da ficha, com limite contra abuso |
 | `GET /api/v1/candidates/:id/photo` | Foto JPEG oficial com cache e ETag |
 | `GET /api/v1/candidates/:id/government-plan/status` | Disponibilidade do plano oficial associado pelo identificador |
 | `GET /api/v1/candidates/:id/government-plan` | PDF oficial de proposta de governo |
 | `GET /api/v1/candidates/:id/government-plan/summary` | Propostas por tema, evidências, análise local e cenário condicional quando disponível |
-| `GET /api/v1/candidates/:id/legislative` | Até cinco projetos recentes do mandato atual verificado |
+| `GET /api/v1/candidates/:id/legislative` | Atuação, despesas, votos nominais no recorte, discursos e até três leis/projetos confirmados |
+| `POST /api/v1/candidates/:id/ask` | Pergunta respondida pela IA local somente com evidências oficiais citadas |
+| `GET /api/v1/share/qr.svg` | QR Code local para comparação compartilhável |
 | `GET /api/v1/candidates/:id/integrity` | TCU, sanções administrativas, valores eleitorais e despesas parlamentares por vínculo exato |
 | `GET /api/v1/changes` | Alterações detectadas entre versões |
 | `POST /api/v1/admin/sync` | Sincronização protegida por segredo montado somente no servidor |
@@ -117,6 +131,8 @@ src/
   local-llm.js         cliente privado do servidor llama.cpp e resposta estruturada
   plan-llm-analysis.js seleção de evidências, validação temática e impactos condicionais
   legislative.js      projetos oficiais e evidência de situação legal
+  asset-history.js    evolução patrimonial sem persistir CPF
+  document-qa.js      recuperação restrita de evidências para perguntas à IA
   integrity.js         consultas oficiais exatas, cache, estágios e remoção de identificadores
   official-sync.js    importação dos pacotes oficiais
   photo-sync.js       fotos oficiais por UF e vínculo por SQ_CANDIDATO

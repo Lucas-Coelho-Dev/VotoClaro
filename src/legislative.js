@@ -29,7 +29,7 @@ function exactKey(name, uf, party) {
 }
 
 const LEGISLATIVE_MATTER_TYPES = new Set(['PL', 'PLP', 'PEC', 'PDL', 'PLS', 'PLC', 'PRS', 'MPV']);
-const LEGISLATIVE_PROFILE_VERSION = 2;
+const LEGISLATIVE_PROFILE_VERSION = 4;
 
 function asArray(value) {
   if (!value) return [];
@@ -542,16 +542,48 @@ class LegislativeService {
 
   async getDeputy(link) {
     const id = encodeURIComponent(link.memberId);
+    const today = new Date().toISOString().slice(0, 10);
+    const voteStart = new Date();
+    voteStart.setUTCDate(voteStart.getUTCDate() - 89);
+    const voteStartDate = voteStart.toISOString().slice(0, 10);
     const projectTypes = [...LEGISLATIVE_MATTER_TYPES]
       .map((type) => `siglaTipo=${encodeURIComponent(type)}`)
       .join('&');
-    const [profile, expenses, proposals] = await Promise.allSettled([
+    const [profile, expenses, proposals, speeches, events, votesIndex] = await Promise.allSettled([
       fetchJson(`https://dadosabertos.camara.leg.br/api/v2/deputados/${id}`, this.config),
       fetchJson(`https://dadosabertos.camara.leg.br/api/v2/deputados/${id}/despesas?ano=2026&itens=100&ordem=DESC&ordenarPor=dataDocumento`, this.config),
       fetchJson(`https://dadosabertos.camara.leg.br/api/v2/proposicoes?idDeputadoAutor=${id}&${projectTypes}&itens=100&ordem=DESC&ordenarPor=id`, this.config),
+      fetchJson(`https://dadosabertos.camara.leg.br/api/v2/deputados/${id}/discursos?dataInicio=2026-01-01&dataFim=${today}&itens=5&ordem=DESC&ordenarPor=dataHoraInicio`, this.config),
+      fetchJson(`https://dadosabertos.camara.leg.br/api/v2/deputados/${id}/eventos?dataInicio=2026-01-01&dataFim=${today}&itens=100&ordem=DESC&ordenarPor=dataHoraInicio`, this.config),
+      fetchJson(`https://dadosabertos.camara.leg.br/api/v2/votacoes?dataInicio=${voteStartDate}&dataFim=${today}&itens=12&ordem=DESC&ordenarPor=dataHoraRegistro`, this.config),
     ]);
     const expenseRows = expenses.status === 'fulfilled' ? expenses.value.dados || [] : [];
     const proposalRows = proposals.status === 'fulfilled' ? proposals.value.dados || [] : [];
+    const speechRows = speeches.status === 'fulfilled' ? speeches.value.dados || [] : [];
+    const eventRows = events.status === 'fulfilled' ? events.value.dados || [] : [];
+    const voteSessions = votesIndex.status === 'fulfilled' ? votesIndex.value.dados || [] : [];
+    const voteDetails = await mapWithConcurrency(voteSessions, 4, async (vote) => {
+      const payload = await fetchJson(`https://dadosabertos.camara.leg.br/api/v2/votacoes/${encodeURIComponent(vote.id)}/votos`, this.config);
+      const found = (payload.dados || []).find((item) => String(item.deputado_?.id || item.deputado?.id || '') === String(link.memberId));
+      if (!found) return null;
+      return {
+        id: vote.id,
+        date: found.dataRegistroVoto || vote.dataHoraRegistro || null,
+        vote: found.tipoVoto || null,
+        description: vote.descricao || vote.ultimaApresentacaoProposicao?.descricao || 'Votação nominal',
+        officialUrl: `https://dadosabertos.camara.leg.br/api/v2/votacoes/${encodeURIComponent(vote.id)}/votos`,
+      };
+    });
+    const expenseCategories = new Map();
+    for (const row of expenseRows) {
+      const category = String(row.tipoDespesa || 'Não informado').trim();
+      const current = expenseCategories.get(category) || { category, value: 0, records: 0 };
+      current.value += Number(row.valorLiquido || 0);
+      current.records += 1;
+      expenseCategories.set(category, current);
+    }
+    const projectsByType = new Map();
+    for (const row of proposalRows) projectsByType.set(row.siglaTipo || 'Outro', (projectsByType.get(row.siglaTipo || 'Outro') || 0) + 1);
     const selected = selectLatestLegislativeItems(
       proposalRows.map((item) => ({ ...item, type: item.siglaTipo })),
       80,
@@ -587,6 +619,30 @@ class LegislativeService {
         recordsShown: expenseRows.length,
         totalShown: expenseRows.reduce((sum, row) => sum + Number(row.valorLiquido || 0), 0),
         partial: expenseRows.length === 100,
+        byCategory: [...expenseCategories.values()].sort((left, right) => right.value - left.value),
+      },
+      activity: {
+        period: { from: '2026-01-01', to: today },
+        officialEventParticipations: eventRows.length,
+        eventParticipationsPartial: eventRows.length === 100,
+        nominalVotesInspected: voteSessions.length,
+        nominalVotesFound: voteDetails.filter(Boolean).length,
+        recentVotes: voteDetails.filter(Boolean).slice(0, 5),
+        speeches: speechRows.map((speech) => ({
+          date: speech.dataHoraInicio || null,
+          type: speech.tipoDiscurso || null,
+          summary: speech.sumario || speech.transcricao || 'Discurso registrado pela Câmara.',
+          phase: speech.faseEvento?.titulo || null,
+          officialUrl: link.profileUrl,
+        })),
+        projectsReturned: proposalRows.length,
+        projectsPartial: proposalRows.length === 100,
+        projectsByType: [...projectsByType].map(([type, count]) => ({ type, count })).sort((left, right) => right.count - left.count),
+        attendanceNote: 'A Câmara retornou participações em eventos e votos nominais deste recorte. O VotoClaro não transforma esse recorte em taxa oficial de presença, porque nem toda votação é nominal e a elegibilidade para votar varia.',
+      },
+      promiseVsAction: {
+        status: 'NOT_COMPARABLE',
+        message: 'Esta consulta não localizou, com vínculo individual verificável, um plano eleitoral anterior que possa ser comparado à atuação. O VotoClaro não presume promessa partidária como promessa pessoal.',
       },
       laws,
       methodology: {
@@ -622,6 +678,17 @@ class LegislativeService {
       chamber: 'Senado Federal',
       profile,
       expenses: null,
+      activity: {
+        projectsReturned: authorshipRows.length,
+        projectsPartial: false,
+        recentVotes: [],
+        speeches: [],
+        attendanceNote: 'A consulta atual do Senado confirma perfil, autorias e normas. Presença, despesas e discursos ainda não são exibidos porque esses conjuntos exigem uma integração oficial separada e validação de cobertura.',
+      },
+      promiseVsAction: {
+        status: 'NOT_COMPARABLE',
+        message: 'Não há plano eleitoral individual anterior vinculado de forma verificável nesta consulta. O VotoClaro não converte programa partidário em promessa pessoal.',
+      },
       laws,
       note: 'A identificação do mandato, a autoria e a norma gerada foram confirmadas nos dados oficiais do Senado. Requerimentos procedimentais não entram neste recorte.',
       methodology: {

@@ -1,7 +1,12 @@
 const http = require('node:http');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { LocalLlmClient, localEndpoint } = require('../src/local-llm');
+const {
+  LocalLlmClient,
+  finishOfficialAnswer,
+  localEndpoint,
+  polishOfficialAnswer,
+} = require('../src/local-llm');
 const { THEMES } = require('../src/plan-summary');
 
 test('consulta somente o servidor local e exige resposta estruturada', async (context) => {
@@ -184,4 +189,47 @@ test('traduz a ementa legislativa em três blocos sem abandonar as ressalvas', a
   }, { candidateName: 'CANDIDATO TESTE' });
   assert.match(pending.possibleImpact, /Se for aprovado e implementado/i);
   assert.match(pending.finePrint, /ainda não produz efeito legal direto/i);
+});
+
+test('responde pergunta documental somente com citação válida e página sustentada', async (context) => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on('end', () => {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        answer: 'O plano propõe ampliar escolas de tempo integral, conforme o trecho oficial localizado na página 22.',
+        citationIds: ['F1'],
+        notFound: false,
+      }) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const client = new LocalLlmClient({
+    localLlmEnabled: true,
+    localLlmBaseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+    localLlmModel: 'qwen3-1.7b-local',
+    localLlmTimeoutMs: 5000,
+    localLlmMaxOutputTokens: 800,
+  }, THEMES);
+  const result = await client.answerOfficialQuestion('O que propõe para educação?', [{
+    id: 'F1', kind: 'Plano de governo', label: 'Educação — página 22', page: 22,
+    text: 'Ampliar escolas de tempo integral.', url: '/plano#page=22',
+  }], { candidateName: 'CANDIDATO TESTE' });
+  assert.deepEqual(result.citationIds, ['F1']);
+  assert.match(result.answer, /página 22/i);
+});
+
+test('corrige concordâncias recorrentes do modelo pequeno sem alterar fatos', () => {
+  assert.equal(
+    polishOfficialAnswer('A candidatura propõe a estabelecimento da medida. Isso aparece no páginas 22 e 23.'),
+    'A candidatura propõe o estabelecimento da medida. Isso aparece nas páginas 22 e 23.',
+  );
+});
+
+test('não exibe uma última ideia interrompida pela LLM', () => {
+  assert.equal(
+    finishOfficialAnswer('Primeira explicação completa. Última ideia foi cortada, mas'),
+    'Primeira explicação completa.',
+  );
 });

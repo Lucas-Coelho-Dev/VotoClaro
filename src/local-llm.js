@@ -4,6 +4,7 @@ const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v16';
 const LOCAL_LLM_PROMPT_VERSION = 'government-plan-theme-explanation-v16';
 const LEGISLATIVE_LLM_ANALYSIS_VERSION = 'legislative-plain-language-v3';
 const LEGISLATIVE_LLM_PROMPT_VERSION = 'legislative-fine-print-v3';
+const DOCUMENT_QA_PROMPT_VERSION = 'official-document-qa-v1';
 
 const objectiveSchema = z.object({
   summary: z.string().trim().min(30).max(180),
@@ -35,6 +36,23 @@ const legislativeExplanationJsonSchema = {
     plainLanguage: { type: 'string', minLength: 30, maxLength: 240 },
     possibleImpact: { type: 'string', minLength: 20, maxLength: 180 },
     finePrint: { type: 'string', minLength: 20, maxLength: 180 },
+  },
+};
+
+const documentAnswerSchema = z.object({
+  answer: z.string().trim().min(30).max(900),
+  citationIds: z.array(z.string().trim().min(1).max(30)).max(6),
+  notFound: z.boolean(),
+});
+
+const documentAnswerJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['answer', 'citationIds', 'notFound'],
+  properties: {
+    answer: { type: 'string', minLength: 30, maxLength: 900 },
+    citationIds: { type: 'array', maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 30 } },
+    notFound: { type: 'boolean' },
   },
 };
 
@@ -170,6 +188,29 @@ function preferredLegislativeSummary(value) {
   return updated || text;
 }
 
+function polishOfficialAnswer(value) {
+  return String(value || '')
+    .replace(/\bpropõe a estabelecimento\b/giu, 'propõe o estabelecimento')
+    .replace(/\b(?:no|na) páginas\b/giu, 'nas páginas')
+    .replace(/\bno página\b/giu, 'na página')
+    .replace(/\bna páginas\b/giu, 'nas páginas')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function finishOfficialAnswer(value) {
+  const answer = polishOfficialAnswer(value);
+  if (!answer || /[.!?)]$/u.test(answer)) return answer;
+  const lastCompleteSentence = Math.max(
+    answer.lastIndexOf('.'),
+    answer.lastIndexOf('!'),
+    answer.lastIndexOf('?'),
+  );
+  return lastCompleteSentence >= 0
+    ? answer.slice(0, lastCompleteSentence + 1).trim()
+    : answer;
+}
+
 async function streamedMessageContent(response) {
   const reader = response.body?.getReader?.();
   if (!reader) throw new Error('A LLM local não abriu o fluxo de resposta.');
@@ -206,7 +247,8 @@ class LocalLlmClient {
     this.activeRequests = 0;
     this.waitingForServer = false;
     this.serverReadyAt = null;
-    this.executionTail = Promise.resolve();
+    this.executionQueue = [];
+    this.executionRunning = false;
   }
 
   isEnabled() {
@@ -269,10 +311,26 @@ class LocalLlmClient {
     return this.runExclusive(() => this.performPlanAnalysis(chunk, context));
   }
 
-  async runExclusive(operation) {
-    const scheduled = this.executionTail.then(operation, operation);
-    this.executionTail = scheduled.catch(() => {});
-    return scheduled;
+  async runExclusive(operation, priority = false) {
+    return new Promise((resolve, reject) => {
+      const job = { operation, resolve, reject };
+      if (priority) this.executionQueue.unshift(job);
+      else this.executionQueue.push(job);
+      setImmediate(() => this.runExecutionQueue());
+    });
+  }
+
+  async runExecutionQueue() {
+    if (this.executionRunning) return;
+    this.executionRunning = true;
+    try {
+      while (this.executionQueue.length) {
+        const job = this.executionQueue.shift();
+        try { job.resolve(await job.operation()); } catch (error) { job.reject(error); }
+      }
+    } finally {
+      this.executionRunning = false;
+    }
   }
 
   async performPlanAnalysis(chunk, context = {}) {
@@ -379,6 +437,83 @@ class LocalLlmClient {
     return this.runExclusive(() => this.performLegislativeAnalysis(item, context));
   }
 
+  async answerOfficialQuestion(question, evidences, context = {}) {
+    return this.runExclusive(() => this.performOfficialQuestion(question, evidences, context), true);
+  }
+
+  async performOfficialQuestion(question, evidences, context = {}) {
+    if (!this.isEnabled()) throw new Error('A LLM local está desabilitada.');
+    const allowed = new Map((evidences || []).map((evidence) => [String(evidence.id), evidence]));
+    if (!allowed.size) return { answer: 'Não encontrei informação suficiente nas fontes oficiais disponíveis para responder a esta pergunta.', citationIds: [], notFound: true };
+    const evidenceText = [...allowed.values()].map((evidence) => [
+      `[${evidence.id}]`,
+      `TIPO: ${evidence.kind}`,
+      `LOCAL: ${evidence.label}`,
+      `TEXTO: ${evidence.text}`,
+    ].join('\n')).join('\n\n');
+    const system = [
+      '/no_think',
+      'Você responde perguntas eleitorais somente com as evidências oficiais numeradas fornecidas.',
+      'Não use conhecimento externo, memória, opinião, inferência sobre caráter nem linguagem de campanha.',
+      'Diferencie proposta, projeto em tramitação, norma jurídica e resultado social medido.',
+      'Se a resposta não estiver sustentada, marque notFound como true e diga claramente que a fonte consultada não informa.',
+      'Toda afirmação factual deve ser sustentada por citationIds existentes. Não invente páginas, números, custos ou consequências.',
+      'Responda em português claro, explicando a letra miúda sem elogiar nem atacar a candidatura.',
+      'Responda somente no JSON solicitado.',
+    ].join(' ');
+    const endpoint = localEndpoint(this.config.localLlmBaseUrl);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.localLlmTimeoutMs);
+    this.activeRequests += 1;
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          model: this.config.localLlmModel,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: `CANDIDATURA: ${context.candidateName || 'não informada'}\nPERGUNTA: ${question}\n\nEVIDÊNCIAS:\n${evidenceText}` },
+          ],
+          temperature: 0.05,
+          top_p: 0.8,
+          seed: 2026,
+          max_tokens: Math.min(this.config.localLlmMaxOutputTokens, 900),
+          stream: true,
+          chat_template_kwargs: { enable_thinking: false },
+          reasoning_effort: 'none',
+          response_format: { type: 'json_schema', json_schema: { name: 'official_document_answer', strict: true, schema: documentAnswerJsonSchema } },
+        }),
+      });
+      if (!response.ok) throw new Error(`LLM local respondeu HTTP ${response.status}.`);
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const content = contentType.includes('text/event-stream')
+        ? await streamedMessageContent(response)
+        : (await response.json())?.choices?.[0]?.message?.content;
+      const parsed = documentAnswerSchema.parse(parseJsonContent(content));
+      const citationIds = [...new Set(parsed.citationIds)].filter((id) => allowed.has(id));
+      if (!parsed.notFound && !citationIds.length) throw new Error('A resposta não apresentou uma citação oficial válida.');
+      const citedText = citationIds.map((id) => {
+        const evidence = allowed.get(id);
+        return `${id} ${evidence.label || ''} ${evidence.page || ''} ${evidence.text}`;
+      }).join(' ');
+      const answer = finishOfficialAnswer(parsed.answer);
+      assertNoUnsupportedNumbers({ answer }, citedText || evidenceText);
+      this.lastSuccessAt = new Date().toISOString();
+      this.lastError = null;
+      return { ...parsed, answer, citationIds };
+    } catch (error) {
+      const normalized = error.name === 'AbortError' ? new Error('Tempo limite ao consultar a LLM local.') : error;
+      this.lastErrorAt = new Date().toISOString();
+      this.lastError = normalized.message;
+      throw normalized;
+    } finally {
+      clearTimeout(timeout);
+      this.activeRequests -= 1;
+    }
+  }
+
   async performLegislativeAnalysis(item, context = {}) {
     if (!this.isEnabled()) throw new Error('A LLM local está desabilitada.');
     const candidateName = String(context.candidateName || 'a pessoa candidata')
@@ -478,8 +613,11 @@ module.exports = {
   LOCAL_LLM_ANALYSIS_VERSION,
   LOCAL_LLM_PROMPT_VERSION,
   LEGISLATIVE_LLM_ANALYSIS_VERSION,
+  DOCUMENT_QA_PROMPT_VERSION,
   LEGISLATIVE_LLM_PROMPT_VERSION,
   llmResponseSchema,
   legislativeExplanationSchema,
   localEndpoint,
+  finishOfficialAnswer,
+  polishOfficialAnswer,
 };

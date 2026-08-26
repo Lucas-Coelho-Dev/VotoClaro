@@ -7,6 +7,8 @@ node_modules
 npm-debug.log*
 data
 data-production
+backups-production
+secrets
 scratch
 *.tmp
 *.log

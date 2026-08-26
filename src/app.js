@@ -3,6 +3,7 @@ const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const compression = require('compression');
+const QRCode = require('qrcode');
 const { rateLimit } = require('express-rate-limit');
 const { z } = require('zod');
 const {
@@ -12,7 +13,9 @@ const {
   legislativeService,
   geographyService,
   governmentPlanService,
+  assetHistoryService,
   governmentPlanSummaryService,
+  localLlmClient,
   integrityService,
   initializeRuntime,
 } = require('./runtime');
@@ -20,11 +23,13 @@ const { publicSources } = require('./sources');
 const { searchable, isVoterFacingOffice, attachRunningMates } = require('./normalize');
 const { IDEOLOGY_SOURCE, IDEOLOGY_FILTERS, getPartyIdeology, partyMarkSvg } = require('./parties');
 const { safeErrorMessage } = require('./safe-log');
+const { buildOfficialEvidence } = require('./document-qa');
 const {
   LOCAL_LLM_ANALYSIS_VERSION,
   LOCAL_LLM_PROMPT_VERSION,
   LEGISLATIVE_LLM_ANALYSIS_VERSION,
   LEGISLATIVE_LLM_PROMPT_VERSION,
+  DOCUMENT_QA_PROMPT_VERSION,
 } = require('./local-llm');
 
 const app = express();
@@ -183,6 +188,10 @@ const popularQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(12).optional().default(6),
 });
 
+const officialQuestionSchema = z.object({
+  question: z.string().trim().min(10).max(240),
+});
+
 const analysisReportSchema = z.object({
   candidateId: z.string().regex(/^\d{8,20}$/),
   subjectType: z.enum(['GOVERNMENT_PLAN', 'LEGISLATIVE_ITEM']),
@@ -291,6 +300,12 @@ app.get('/api/v1/ai/methodology', async (request, response, next) => {
           promptVersion: LEGISLATIVE_LLM_PROMPT_VERSION,
           documents: ['Ementas, situações e autorias oficiais da Câmara dos Deputados e do Senado Federal'],
         },
+        officialDocumentQuestions: {
+          analysisVersion: 'official-document-qa-v1',
+          promptVersion: DOCUMENT_QA_PROMPT_VERSION,
+          documents: ['Trechos do PDF oficial do TSE e itens legislativos com autoria vinculada exatamente'],
+          storage: 'As perguntas e respostas não são armazenadas pelo VotoClaro.',
+        },
       },
       validations: [
         'Cada tema do plano é analisado isoladamente para reduzir mistura entre assuntos.',
@@ -298,6 +313,7 @@ app.get('/api/v1/ai/methodology', async (request, response, next) => {
         'Números que não aparecem nos documentos fornecidos à IA são rejeitados.',
         'Autoria legislativa só é mostrada após correspondência exata com a fonte oficial.',
         'Impactos são cenários condicionais e não previsões, garantias ou notas eleitorais.',
+        'Perguntas livres recebem somente os trechos recuperados das fontes oficiais e exigem citações válidas.',
       ],
       limitations: [
         'A IA pode simplificar demais, deixar de identificar uma proposta ou interpretar de forma incompleta.',
@@ -719,6 +735,129 @@ app.all('/api/v1/admin/sync', (request, response) => {
   return response.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Use POST com autenticação Bearer.' });
 });
 
+app.get('/api/v1/share/qr.svg', async (request, response, next) => {
+  try {
+    const relativePath = String(request.query.path || '').trim();
+    if (!relativePath.startsWith('/') || relativePath.startsWith('//') || relativePath.length > 1000) {
+      return response.status(400).json({ error: 'INVALID_SHARE_PATH' });
+    }
+    const target = new URL(relativePath, config.portalUrl).toString();
+    const svg = await QRCode.toString(target, { type: 'svg', errorCorrectionLevel: 'M', margin: 1, width: 320, color: { dark: '#0b2942', light: '#ffffff' } });
+    response.set({ 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+    return response.send(svg);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/v1/candidates/:id/ask', heavyRateLimit, async (request, response, next) => {
+  try {
+    const snapshot = snapshotOrUnavailable(response);
+    if (!snapshot) return;
+    const candidate = snapshot.candidates.find((item) => item.id === request.params.id);
+    if (!candidate) return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND' });
+    const { question } = officialQuestionSchema.parse(request.body);
+    const [summaryResult, legislativeResult] = await Promise.allSettled([
+      ['PRESIDENTE', 'GOVERNADOR'].includes(String(candidate.office || '').toUpperCase())
+        ? governmentPlanSummaryService.get(candidate)
+        : Promise.resolve(null),
+      candidate.legislative ? legislativeService.get(candidate) : Promise.resolve(null),
+    ]);
+    const summary = summaryResult.status === 'fulfilled' ? summaryResult.value : null;
+    const legislative = legislativeResult.status === 'fulfilled' ? legislativeResult.value : null;
+    const evidences = buildOfficialEvidence(question, summary, legislative, candidate.id);
+    response.setHeader('Cache-Control', 'no-store');
+    if (!evidences.length) {
+      return response.json({
+        data: {
+          answer: 'Não encontrei informação suficiente nas fontes oficiais disponíveis desta candidatura para responder a essa pergunta.',
+          notFound: true,
+          citations: [],
+          generatedBy: 'RESTRICTED_RETRIEVAL',
+        },
+        policy: 'A resposta não usa internet aberta nem conhecimento livre da IA; somente o plano oficial e os registros legislativos vinculados exatamente.',
+      });
+    }
+    if (!localLlmClient.isEnabled()) {
+      return response.status(503).json({
+        error: 'LOCAL_AI_NOT_AVAILABLE',
+        message: 'As fontes foram localizadas, mas o trabalhador local de IA não está disponível neste processo agora.',
+      });
+    }
+    await localLlmClient.waitUntilReady();
+    const answer = await localLlmClient.answerOfficialQuestion(question, evidences, {
+      candidateName: candidate.ballotName || candidate.name,
+    });
+    const citations = answer.citationIds.map((id) => evidences.find((evidence) => evidence.id === id)).filter(Boolean);
+    return response.json({
+      data: {
+        answer: answer.answer,
+        notFound: answer.notFound,
+        citations,
+        generatedBy: 'LOCAL_LLM_GROUNDED',
+        model: config.localLlmModel,
+        promptVersion: 'official-document-qa-v1',
+        generatedAt: new Date().toISOString(),
+      },
+      policy: 'A IA recebeu somente trechos das fontes oficiais exibidas nas citações. As respostas podem ser contestadas pelo formulário de correção.',
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/v1/candidates/:id/assets/history', async (request, response, next) => {
+  try {
+    const snapshot = snapshotOrUnavailable(response);
+    if (!snapshot) return;
+    const candidate = snapshot.candidates.find((item) => item.id === request.params.id);
+    if (!candidate) return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND' });
+    const data = await assetHistoryService.get(candidate);
+    response.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+    return response.json({ data });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/v1/candidates/:id/history', async (request, response, next) => {
+  try {
+    const snapshot = snapshotOrUnavailable(response);
+    if (!snapshot) return;
+    const candidate = snapshot.candidates.find((item) => item.id === request.params.id);
+    if (!candidate) return response.status(404).json({ error: 'CANDIDATE_NOT_FOUND' });
+    const [snapshotEvents, planDocuments, corrections] = await Promise.all([
+      store.getCandidateHistory(candidate.id),
+      store.getGovernmentPlanDocuments(candidate.id),
+      store.getResolvedCandidateCorrections(candidate.id),
+    ]);
+    const planEvents = planDocuments.map((document, index) => ({
+      type: index < planDocuments.length - 1 ? 'GOVERNMENT_PLAN_REPLACED' : 'GOVERNMENT_PLAN_FOUND',
+      label: index < planDocuments.length - 1 ? 'Nova versão do plano oficial localizada' : 'Plano oficial localizado',
+      detectedAt: document.firstSeenAt,
+      source: 'TSE — proposta de governo associada pelo identificador da candidatura',
+      document: { filename: document.filename, sha256: document.sha256 },
+    }));
+    const correctionEvents = corrections.map((correction) => ({
+      type: 'VOTOCLARO_CORRECTION',
+      label: 'Correção concluída pela equipe do VotoClaro',
+      detectedAt: correction.updatedAt,
+      source: 'Histórico de revisão do VotoClaro',
+      category: correction.category,
+      resolutionNote: correction.resolutionNote,
+    }));
+    const events = [...snapshotEvents, ...planEvents, ...correctionEvents]
+      .sort((left, right) => new Date(right.detectedAt || 0) - new Date(left.detectedAt || 0));
+    response.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=900');
+    return response.json({
+      data: events,
+      note: 'A linha do tempo mostra somente mudanças observadas entre versões oficiais importadas e correções registradas. Ausência de evento não significa ausência de mudança fora dessas fontes.',
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.patch('/api/v1/admin/reports/:trackingCode', adminRateLimit, requireAdministrativeSecret(config.adminSecret, 'ADMIN_NOT_CONFIGURED'), async (request, response, next) => {
   try {
     const trackingCode = String(request.params.trackingCode || '').trim().toUpperCase();
@@ -742,7 +881,7 @@ app.all(['/api/auth/*', '/api/colinha'], (request, response) => response.status(
   message: 'Cadastro com CPF e sincronização de preferência política foram desativados. A colinha agora permanece no navegador.',
 }));
 
-app.get(['/', '/index.html'], (request, response) => {
+app.get(['/', '/index.html', '/candidato/:id', '/comparar'], (request, response) => {
   response.setHeader('Cache-Control', 'no-cache');
   response.sendFile(path.join(config.publicDir, 'official.html'));
 });

@@ -48,7 +48,7 @@ services:
       DATA_DIR: /data
       PHOTO_DIR: /data/photos
       PUBLIC_BASE_URL: https://${SITE_HOST}
-      LOCAL_LLM_ENABLED: "false"
+      LOCAL_LLM_ENABLED: "true"
       AI_WORKER_AVAILABLE: "true"
       LOCAL_LLM_BASE_URL: http://llm:8080/v1
       LOCAL_LLM_MODEL: qwen3-1.7b-local
