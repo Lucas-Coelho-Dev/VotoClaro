@@ -521,7 +521,11 @@ function buildGeneralObjective(themeSummaries) {
       id: theme.id,
       label: theme.label,
       summary: firstSentence(theme.digest.summary),
+      potentialImpact: cleanText(theme.digest.potentialImpact, 560),
+      conditionsAndLimits: cleanText(theme.digest.conditionsAndLimits, 420),
       page: Number(theme.digest.evidences[0].page) || 1,
+      pages: [...new Set(theme.digest.evidences.map((evidence) => Number(evidence.page) || 1))]
+        .sort((left, right) => left - right),
       evidence: theme.digest.evidences[0],
     }));
   if (!priorities.length) return null;

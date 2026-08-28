@@ -974,7 +974,7 @@ async function loadGovernmentPlanSummary(id, container) {
   }
 }
 
-function renderPlanObjective(objective, pdfUrl) {
+function renderPlanObjective(objective, pdfUrl, themeSummaries = []) {
   if (!objective?.summary || !objective.evidences?.length) return '';
   const summary = (() => {
     const text = String(objective.summary).trim();
@@ -984,9 +984,21 @@ function renderPlanObjective(objective, pdfUrl) {
   })();
   const priorities = Array.isArray(objective.priorities) ? objective.priorities : [];
   const priorityList = priorities.length
-    ? `<div class="objective-theme-list">${priorities.map((priority) => `<article><div><strong>${escapeHtml(priority.label)}</strong><p>${escapeHtml(priority.summary)}</p></div><a href="${escapeHtml(pdfUrl)}#page=${Number(priority.page) || 1}" target="_blank" rel="noopener noreferrer" aria-label="Conferir ${escapeHtml(priority.label)} na página ${Number(priority.page) || 1}">p. ${Number(priority.page) || 1} ↗</a></article>`).join('')}</div>`
+    ? `<div class="objective-theme-list">${priorities.map((priority) => {
+      const theme = themeSummaries.find((item) => item.id === priority.id);
+      const impact = priority.potentialImpact || theme?.digest?.potentialImpact || 'O plano não trouxe elementos suficientes para explicar como essa direção pode chegar à vida cotidiana.';
+      const limits = priority.conditionsAndLimits || theme?.digest?.conditionsAndLimits || 'Os trechos selecionados não detalham todas as etapas de execução, os recursos necessários nem como os resultados seriam medidos.';
+      const pages = [...new Set((priority.pages?.length
+        ? priority.pages
+        : theme?.digest?.pages?.length
+          ? theme.digest.pages
+          : [priority.page]
+      ).map((page) => Number(page) || 1))];
+      const pageLinks = pages.map((page) => `<a href="${escapeHtml(pdfUrl)}#page=${page}" target="_blank" rel="noopener noreferrer" aria-label="Conferir ${escapeHtml(priority.label)} na página ${page}">p. ${page} ↗</a>`).join(' · ');
+      return `<details class="objective-theme-card"><summary><span class="objective-theme-heading"><strong>${escapeHtml(priority.label)}</strong><small>Entenda o efeito possível e os pontos que faltam</small></span><p><b>Direção principal:</b> ${escapeHtml(priority.summary)}</p><span class="objective-theme-expand" aria-hidden="true">+</span></summary><div class="objective-theme-details"><section class="is-impact"><strong>Como isso pode chegar à sociedade</strong><p>${escapeHtml(impact)}</p></section><section class="is-limits"><strong>O que o eleitor precisa conferir</strong><p>${escapeHtml(limits)}</p></section><div class="objective-theme-sources"><strong>Trechos oficiais usados:</strong> ${pageLinks}</div></div></details>`;
+    }).join('')}</div>`
     : `<div class="objective-sources"><strong>Baseado em trechos validados:</strong> ${objective.evidences.map((evidence) => `<a href="${escapeHtml(pdfUrl)}#page=${Number(evidence.page) || 1}" target="_blank" rel="noopener noreferrer">p. ${Number(evidence.page) || 1}</a>`).join(' · ')}</div>`;
-  return `<article class="plan-objective"><span>VISÃO GERAL DO PLANO · LEITURA DA IA</span><h5>O que este plano pretende mudar no conjunto?</h5><p>${escapeHtml(summary)}</p>${priorityList}</article>`;
+  return `<article class="plan-objective"><span>VISÃO GERAL DO PLANO · LEITURA DA IA</span><h5>O plano em linguagem prática: o que muda e o que falta explicar</h5><p class="objective-intro">${escapeHtml(summary)}</p><div class="objective-reading-guide"><strong>Como usar esta leitura</strong><p>Abra um tema para entender a direção proposta, como ela pode alcançar a população e quais informações ainda precisam ser cobradas antes de avaliar a promessa.</p></div>${priorityList}</article>`;
 }
 
 function renderAnalysisReportForm(summary, candidateId) {
@@ -1028,7 +1040,7 @@ function renderPlanSummary(summary, candidateId = '') {
   const modelNote = localAiReady
     ? ` · IA local ${escapeHtml(summary.aiAnalysis.model || '')} · ${Number(summary.aiAnalysis.evidenceExcerpts || 0)} evidências selecionadas`
     : '';
-  const objective = localAiReady ? renderPlanObjective(summary.candidateObjective, summary.pdfUrl) : '';
+  const objective = localAiReady ? renderPlanObjective(summary.candidateObjective, summary.pdfUrl, summary.themeSummaries) : '';
   return `<section class="plan-summary"><div class="plan-summary-heading"><div><span class="summary-badge">${analysisBadge}</span><h4>Entenda o plano antes de escolher</h4></div><span class="coverage-pill">${foundCount}/${totalThemes} temas com propostas</span></div><p class="plan-overview">${escapeHtml(summary.overview)}</p>${pending}${objective}<div class="plan-theme-list">${themes}</div><div class="summary-notice"><strong>Como ler esta classificação</strong><p>${escapeHtml(summary.notice)}</p><span>${Number(summary.document?.pages || 0)} páginas · texto extraível em ${Number(summary.document?.textCoveragePercent || 0)}% das páginas processadas${modelNote} · gerado em ${formatDate(summary.generatedAt)}</span><a class="inline-link" href="/ai-methodology.html">Ver modelo, prompt, validações e histórico da IA</a></div>${renderAnalysisReportForm(summary, candidateId)}</section>`;
 }
 

@@ -191,6 +191,8 @@ test('visão geral percorre todos os nove temas antes das análises separadas', 
     status: 'FOUND',
     digest: {
       summary: `Prioridade principal de ${theme.label} com mudança prevista no serviço público. Detalhes adicionais.`,
+      potentialImpact: `A execução da prioridade de ${theme.label} pode alterar a forma como o serviço chega à população, dependendo das condições descritas.`,
+      conditionsAndLimits: `Os trechos de ${theme.label} ainda precisam esclarecer recursos, alcance e indicadores de acompanhamento.`,
       evidences: [{ page: index + 2, quote: `Trecho oficial sobre ${theme.label}.` }],
     },
   }));
@@ -198,6 +200,9 @@ test('visão geral percorre todos os nove temas antes das análises separadas', 
   assert.equal(objective.priorities.length, 9);
   assert.equal(objective.evidences.length, 9);
   assert.deepEqual(objective.pages, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.ok(objective.priorities.every((priority) => priority.potentialImpact));
+  assert.ok(objective.priorities.every((priority) => priority.conditionsAndLimits));
+  assert.ok(objective.priorities.every((priority) => priority.pages.length === 1));
   assert.match(objective.summary, /9 temas/i);
   THEMES.forEach((theme) => assert.match(objective.summary, new RegExp(theme.label.split(',')[0], 'i')));
 });
