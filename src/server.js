@@ -12,6 +12,14 @@ const {
 let server;
 let timer;
 let snapshotRefreshTimer;
+let identityRefreshTimer;
+
+function refreshIdentityVault() {
+  if (!config.identityVaultRefreshOnStart) return;
+  synchronizer.refreshIdentityVault()
+    .then((count) => console.log(`Cofre temporário de identificação atualizado com ${count} vínculos oficiais.`))
+    .catch((error) => console.error('Não foi possível atualizar o cofre temporário de identificação:', error.message));
+}
 
 function precomputeLatestGovernmentPlans() {
   const snapshot = store.getSnapshot();
@@ -34,6 +42,7 @@ async function start() {
   });
 
   const hasPersistedSnapshot = Boolean(store.getSnapshot());
+  if (hasPersistedSnapshot) setImmediate(refreshIdentityVault);
   if (config.syncOnStart && !hasPersistedSnapshot) {
     synchronizer.synchronize('startup').then((meta) => {
       console.log(`Sincronização concluída: ${meta.candidateCount} candidaturas oficiais.`);
@@ -66,12 +75,18 @@ async function start() {
     }
   }, config.snapshotRefreshSeconds * 1000);
   snapshotRefreshTimer.unref();
+
+  if (config.identityVaultRefreshOnStart) {
+    identityRefreshTimer = setInterval(refreshIdentityVault, config.syncIntervalMinutes * 60 * 1000);
+    identityRefreshTimer.unref();
+  }
 }
 
 async function shutdown(signal) {
   console.log(`Encerrando por ${signal}...`);
   if (timer) clearInterval(timer);
   if (snapshotRefreshTimer) clearInterval(snapshotRefreshTimer);
+  if (identityRefreshTimer) clearInterval(identityRefreshTimer);
   if (server) await new Promise((resolve) => server.close(resolve));
   await store.close();
   process.exit(0);

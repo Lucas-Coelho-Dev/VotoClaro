@@ -110,7 +110,7 @@ Filtros de candidaturas: `q`, `office`, `uf`, `party`, `ideology`, `status`, `pa
 - TCU — contas irregulares, possível implicação eleitoral, inabilitação e inidoneidade
 - Portal da Transparência — CEIS, CNEP e CEAF quando `PORTAL_TRANSPARENCIA_TOKEN` estiver configurado
 
-Vínculos legislativos só são publicados quando nome de urna, UF e partido coincidem exatamente entre as fontes oficiais. TCU e Portal da Transparência são consultados pelo CPF oficial completo mantido apenas na memória do servidor; respostas sem o mesmo identificador são descartadas. CNJ e Google Fact Check permanecem planejados até existir integração que preserve identificação inequívoca, estágio processual e revisão compatível.
+Vínculos legislativos só são publicados quando nome de urna, UF e partido coincidem exatamente entre as fontes oficiais. TCU e Portal da Transparência são consultados pelo CPF oficial completo mantido apenas na memória do servidor; respostas sem o mesmo identificador são descartadas. O DataJud consulta somente o número exato do processo de registro publicado pelo TSE, e o Google Fact Check é apresentado como pesquisa textual secundária, sem atribuição automática ao candidato.
 
 ## Estrutura
 
@@ -159,4 +159,4 @@ Para testar publicamente sem mensalidade, consulte [DEPLOY_FREE.md](DEPLOY_FREE.
 
 Os dados e retratos do TSE são publicados sob Creative Commons Attribution. A interface deve manter atribuição e links para a publicação original. O VotoClaro é independente e não representa a Justiça Eleitoral, partidos ou candidaturas.
 
-Consulte [docs/INTEGRITY_INTEGRATION.md](docs/INTEGRITY_INTEGRATION.md) antes de habilitar o Portal da Transparência ou alterar as regras de correspondência e publicação.
+Consulte [docs/INTEGRITY_INTEGRATION.md](docs/INTEGRITY_INTEGRATION.md) antes de habilitar o Portal da Transparência ou alterar as regras de correspondência e publicação. Para ativar as novas fontes, siga [docs/DATAJUD_FACTCHECK_SETUP.md](docs/DATAJUD_FACTCHECK_SETUP.md).

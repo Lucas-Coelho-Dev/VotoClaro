@@ -120,3 +120,42 @@ test('falha externa não derruba valores oficiais já importados do TSE', async 
   assert.equal(data.campaignFinance.status, 'PUBLISHED');
   assert.equal(data.campaignFinance.totalRevenue, 1000);
 });
+
+test('DataJud consulta somente o número CNJ exato publicado pelo TSE', async () => {
+  const service = new IntegrityService(config({ datajudApiKey: 'chave-publica' }), new CandidateIdentityVault(), {
+    fetchImpl: async (url, options) => {
+      assert.match(url, /api_publica_(?:tre-rj|tse)\/_search$/);
+      assert.equal(options.headers.Authorization, 'APIKey chave-publica');
+      assert.equal(JSON.parse(options.body).query.match.numeroProcesso, '06000001220266000000');
+      return jsonResponse({ hits: { hits: [{ _source: {
+        numeroProcesso: '06000001220266000000', tribunal: 'TRE-RJ', grau: 'G1',
+        classe: { nome: 'Registro de Candidatura' }, movimentos: [{ nome: 'Distribuído', dataHora: '2026-08-10T12:00:00Z' }],
+      } }] } });
+    },
+  });
+  const result = await service.queryDatajud({ registrationProcess: '0600000-12.2026.6.00.0000', uf: 'RJ' });
+  assert.equal(result.status, 'FOUND');
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].className, 'Registro de Candidatura');
+});
+
+test('Fact Check é marcado como busca secundária e preserva o publicador', async () => {
+  const service = new IntegrityService(config({ googleFactCheckApiKey: 'chave-google' }), new CandidateIdentityVault(), {
+    fetchImpl: async (url) => {
+      assert.match(url, /claims:search\?/);
+      assert.match(url, /key=chave-google/);
+      return jsonResponse({ claims: [{
+        text: 'Uma alegação pública', claimant: 'Pessoa citada',
+        claimReview: [{
+          publisher: { name: 'Agência de checagem', site: 'checagem.example' },
+          title: 'Verificação publicada', textualRating: 'Contexto ausente',
+          reviewDate: '2026-08-20T00:00:00Z', url: 'https://checagem.example/verificacao',
+        }],
+      }] });
+    },
+  });
+  const result = await service.queryFactChecks({ name: 'PESSOA TESTE' });
+  assert.equal(result.status, 'FOUND');
+  assert.equal(result.source.confidence, 'SECONDARY');
+  assert.equal(result.records[0].publisher, 'Agência de checagem');
+});

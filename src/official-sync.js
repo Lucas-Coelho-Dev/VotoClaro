@@ -29,6 +29,12 @@ class OfficialDataSync {
     return Boolean(this.running);
   }
 
+  async refreshIdentityVault() {
+    if (!this.identityVault) return 0;
+    const candidateRows = await this.downloadZipRecords(SOURCES.tseCandidates.resourceUrl);
+    return this.identityVault.replace(candidateRows);
+  }
+
   async synchronize(trigger = 'scheduled') {
     if (this.running) return this.running;
     this.running = this.run(trigger).finally(() => {
@@ -48,9 +54,13 @@ class OfficialDataSync {
         ['candidateComplement', SOURCES.tseCandidateComplement],
         ['assets', SOURCES.tseAssets],
         ['social', SOURCES.tseSocial],
-        ['revenues', SOURCES.tseRevenue],
-        ['expenses', SOURCES.tseExpense],
       ];
+
+      const financeStartedAt = new Date().toISOString();
+      const financePromise = this.downloadZipRecordGroups(SOURCES.tseRevenue.resourceUrl, {
+        revenues: SOURCES.tseRevenue.archiveEntryPattern,
+        expenses: SOURCES.tseExpense.archiveEntryPattern,
+      });
 
       const results = await Promise.all(resourceEntries.map(async ([key, source]) => {
         const sourceStartedAt = new Date().toISOString();
@@ -99,6 +109,55 @@ class OfficialDataSync {
           return [key, null];
         }
       }));
+
+      try {
+        const financeGroups = await financePromise;
+        for (const [key, source] of [['revenues', SOURCES.tseRevenue], ['expenses', SOURCES.tseExpense]]) {
+          const records = financeGroups[key];
+          const finishedAt = new Date().toISOString();
+          statuses[source.id] = {
+            state: 'OK',
+            lastAttemptAt: finishedAt,
+            lastSuccessAt: finishedAt,
+            records: records.length,
+            consecutiveFailures: 0,
+            alert: false,
+            message: `${records.length.toLocaleString('pt-BR')} registros recebidos do arquivo nacional consolidado.`,
+          };
+          await this.store.recordRun({
+            sourceId: source.id,
+            status: 'SUCCESS',
+            startedAt: financeStartedAt,
+            finishedAt,
+            recordCount: records.length,
+          });
+          results.push([key, records]);
+        }
+      } catch (error) {
+        for (const source of [SOURCES.tseRevenue, SOURCES.tseExpense]) {
+          const lastStatus = previousStatuses[source.id] || {};
+          const consecutiveFailures = Number(lastStatus.consecutiveFailures || 0) + 1;
+          const finishedAt = new Date().toISOString();
+          statuses[source.id] = {
+            state: 'UNAVAILABLE',
+            lastAttemptAt: finishedAt,
+            lastSuccessAt: lastStatus.lastSuccessAt || null,
+            consecutiveFailures,
+            alert: true,
+            message: 'O pacote financeiro oficial não respondeu nesta tentativa. A última versão válida foi preservada quando disponível.',
+            error: error.message,
+          };
+          console.error(`[ALERTA DE FONTE] ${source.id} falhou pela ${consecutiveFailures}ª vez consecutiva: ${error.message}`);
+          await this.store.recordRun({
+            sourceId: source.id,
+            status: 'UNAVAILABLE',
+            startedAt: financeStartedAt,
+            finishedAt,
+            error: error.message,
+          });
+          results.push([source === SOURCES.tseRevenue ? 'revenues' : 'expenses', null]);
+        }
+      }
 
       const datasets = Object.fromEntries(results);
       if (!datasets.candidates) {
@@ -282,7 +341,7 @@ class OfficialDataSync {
     }
   }
 
-  async downloadZipRecords(url) {
+  async downloadZipBuffer(url) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
     try {
@@ -309,7 +368,7 @@ class OfficialDataSync {
         buffer = Buffer.from(await response.arrayBuffer());
       }
       if (buffer.length > this.config.maxDownloadBytes) throw new Error('Arquivo excede o limite de segurança configurado.');
-      return this.parseZip(buffer);
+      return buffer;
     } catch (error) {
       if (error.name === 'AbortError') throw new Error(`Tempo limite ao consultar ${new URL(url).hostname}`);
       throw error;
@@ -318,11 +377,24 @@ class OfficialDataSync {
     }
   }
 
-  parseZip(buffer) {
+  async downloadZipRecords(url, entryPattern = null) {
+    return this.parseZip(await this.downloadZipBuffer(url), entryPattern);
+  }
+
+  async downloadZipRecordGroups(url, groups) {
+    const buffer = await this.downloadZipBuffer(url);
+    return Object.fromEntries(Object.entries(groups).map(([key, pattern]) => [key, this.parseZip(buffer, pattern)]));
+  }
+
+  parseZip(buffer, entryPattern = null) {
     const zip = new AdmZip(buffer);
     const records = [];
-    const entries = zip.getEntries().filter((entry) => !entry.isDirectory && /\.(csv|txt)$/i.test(entry.entryName));
-    if (!entries.length) throw new Error('O pacote oficial não contém arquivos CSV.');
+    const entries = zip.getEntries().filter((entry) => (
+      !entry.isDirectory
+      && /\.(csv|txt)$/i.test(entry.entryName)
+      && (!entryPattern || entryPattern.test(entry.entryName))
+    ));
+    if (!entries.length) throw new Error('O pacote oficial não contém o arquivo CSV esperado.');
     for (const entry of entries) {
       const csv = entry.getData().toString('latin1');
       const parsed = parse(csv, {

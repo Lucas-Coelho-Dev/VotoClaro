@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   LocalLlmClient,
+  deterministicLegislativeExplanation,
   finishOfficialAnswer,
   localEndpoint,
   polishOfficialAnswer,
@@ -189,6 +190,19 @@ test('traduz a ementa legislativa em três blocos sem abandonar as ressalvas', a
   }, { candidateName: 'CANDIDATO TESTE' });
   assert.match(pending.possibleImpact, /Se for aprovado e implementado/i);
   assert.match(pending.finePrint, /ainda não produz efeito legal direto/i);
+});
+
+test('fallback legislativo usa somente a ementa quando a geração é rejeitada', () => {
+  const item = {
+    summary: 'Altera o artigo 20 para organizar o atendimento público.',
+    evidence: { stage: 'PROPOSAL' },
+  };
+  const source = 'EMENTA OFICIAL: Altera o artigo 20 para organizar o atendimento público.';
+  const result = deterministicLegislativeExplanation(item, source);
+  assert.equal(result.validationFallback, true);
+  assert.match(result.plainLanguage, /artigo 20/i);
+  assert.doesNotMatch(JSON.stringify(result), /70/);
+  assert.match(result.finePrint, /ainda não produz efeito legal direto/i);
 });
 
 test('responde pergunta documental somente com citação válida e página sustentada', async (context) => {

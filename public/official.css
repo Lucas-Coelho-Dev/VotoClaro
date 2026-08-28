@@ -384,8 +384,11 @@ a { color: var(--blue); }
 .source-card .source-meta { margin-top: auto; padding-top: 14px; }
 .source-state { width: max-content; padding: 4px 8px; border-radius: 99px; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .source-state.ok { color: var(--green); background: var(--green-soft); }
-.source-state.planned, .source-state.not_synced { color: #526d82; background: #edf2f7; }
+.source-state.planned, .source-state.not_synced, .source-state.credential_required { color: #526d82; background: #edf2f7; }
 .source-state.error, .source-state.unavailable, .source-state.partial { color: var(--amber); background: var(--amber-soft); }
+
+.integrity-record-fact-check { border-left-color: var(--amber); background: #fffdf5; }
+.integrity-record-datajud { border-left-color: #4775a8; }
 .source-kind { margin-left: 6px; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .sync-panel { margin-top: 32px; }
 .sync-panel h3 { color: var(--navy); }

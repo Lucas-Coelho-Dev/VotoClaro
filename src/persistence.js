@@ -666,6 +666,39 @@ class SnapshotStore {
     );
   }
 
+  async recoverInterruptedAnalyses({ planVersion, legislativeVersion, staleMinutes = 30 } = {}) {
+    if (!this.pool) return { plans: 0, legislativeItems: 0, transientPlanFailures: 0 };
+    const age = Math.max(5, Number(staleMinutes) || 30);
+    const [plans, legislativeItems, transientPlans] = await Promise.all([
+      this.pool.query(
+        `UPDATE government_plan_analyses
+         SET status = 'PENDING', error_message = NULL, updated_at = NOW()
+         WHERE analysis_version = $1 AND status = 'PROCESSING'
+           AND updated_at < NOW() - ($2::double precision * INTERVAL '1 minute')`,
+        [String(planVersion), age],
+      ),
+      this.pool.query(
+        `UPDATE legislative_item_analyses
+         SET status = 'PENDING', error_message = NULL, updated_at = NOW()
+         WHERE analysis_version = $1 AND status = 'PROCESSING'
+           AND updated_at < NOW() - ($2::double precision * INTERVAL '1 minute')`,
+        [String(legislativeVersion), age],
+      ),
+      this.pool.query(
+        `UPDATE government_plan_analyses
+         SET status = 'PENDING', error_message = NULL, attempts = 0, updated_at = NOW()
+         WHERE analysis_version = $1 AND status = 'FAILED'
+           AND error_message ~* '(tempo limite|loading model|terminated)'`,
+        [String(planVersion)],
+      ),
+    ]);
+    return {
+      plans: plans.rowCount,
+      legislativeItems: legislativeItems.rowCount,
+      transientPlanFailures: transientPlans.rowCount,
+    };
+  }
+
   async createAnalysisReport(report) {
     const stored = {
       ...report,

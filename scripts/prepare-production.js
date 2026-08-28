@@ -50,6 +50,8 @@ async function main() {
     createSecret('sync_secret.txt'),
     createSecret('admin_secret.txt'),
     createSecret('portal_transparencia_token.txt', ''),
+    createSecret('datajud_api_key.txt', ''),
+    createSecret('google_fact_check_api_key.txt', ''),
   ]);
   await prepareEnvironment();
   console.log(`Produção preparada. Segredos: ${results.join(', ')}. Edite somente SITE_HOST, ACME_EMAIL e opções não sigilosas em .env.free.`);

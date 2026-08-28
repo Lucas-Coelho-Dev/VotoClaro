@@ -695,7 +695,7 @@ function historyValue(value) {
 async function loadIntegrity(id, { forceRefresh = false } = {}) {
   const container = byId('integrityData');
   if (!container) return;
-  container.innerHTML = '<div class="mini-loading">Consultando TCU, TSE e fontes oficiais de transparência…</div>';
+  container.innerHTML = '<div class="mini-loading">Consultando TCU, TSE, DataJud e fontes de transparência e checagem…</div>';
   try {
     const suffix = forceRefresh ? '?refresh=1' : '';
     const payload = await requestJson(`/api/v1/candidates/${encodeURIComponent(id)}/integrity${suffix}`);
@@ -710,6 +710,8 @@ async function loadIntegrity(id, { forceRefresh = false } = {}) {
 function integrityStageLabel(record) {
   if (record.stage === 'FINAL_DECISION') return 'Decisão final publicada';
   if (record.stage === 'ADMINISTRATIVE_SANCTION') return 'Sanção administrativa publicada';
+  if (record.stage === 'ELECTORAL_REGISTRATION_PROCESS') return 'Processo de registro eleitoral';
+  if (record.stage === 'SECONDARY_FACT_CHECK') return 'Checagem publicada por terceiro';
   return 'Registro oficial publicado';
 }
 
@@ -739,7 +741,27 @@ function renderSanctionRecord(record) {
   </article>`;
 }
 
-function renderIntegrityRegistry(title, section, renderer) {
+function renderDatajudRecord(record) {
+  return `<article class="integrity-record integrity-record-datajud">
+    <div class="integrity-record-heading"><span class="integrity-stage">${integrityStageLabel(record)}</span>${record.court ? `<span class="integrity-registry">${escapeHtml(record.court)}</span>` : ''}</div>
+    <h5>${escapeHtml(record.className || 'Metadados processuais')}</h5>
+    <p>${escapeHtml(record.explanation || '')}</p>
+    <div class="integrity-meta">${integrityMeta('Número CNJ', record.processNumber)}${integrityMeta('Grau', record.degree)}${integrityMeta('Órgão julgador', record.judgingBody)}${integrityMeta('Ajuizamento', record.filingDate)}${integrityMeta('Último movimento', record.lastMovement ? [record.lastMovement.name, record.lastMovement.date].filter(Boolean).join(' — ') : null)}</div>
+    ${record.subjects?.length ? `<div class="integrity-basis"><strong>Assuntos publicados</strong><p>${escapeHtml(record.subjects.join(', '))}</p></div>` : ''}
+  </article>`;
+}
+
+function renderFactCheckRecord(record) {
+  return `<article class="integrity-record integrity-record-fact-check">
+    <div class="integrity-record-heading"><span class="integrity-stage administrative">${integrityStageLabel(record)}</span>${record.publisher ? `<span class="integrity-registry">${escapeHtml(record.publisher)}</span>` : ''}</div>
+    <h5>${escapeHtml(record.title || record.claim)}</h5>
+    ${record.claim ? `<p><strong>Alegação analisada:</strong> ${escapeHtml(record.claim)}</p>` : ''}
+    <div class="integrity-meta">${integrityMeta('Pessoa/organização citada', record.claimant)}${integrityMeta('Avaliação publicada', record.rating)}${integrityMeta('Data da checagem', record.reviewDate)}</div>
+    <a class="inline-link" href="${escapeHtml(record.url)}" target="_blank" rel="noopener noreferrer">Ler a checagem no publicador ↗</a>
+  </article>`;
+}
+
+function renderIntegrityRegistry(title, section, renderer, kindLabel = 'FONTE OFICIAL') {
   const current = section || { status: 'UNAVAILABLE', records: [], message: 'Fonte indisponível.' };
   const records = Array.isArray(current.records) ? current.records : [];
   const sourceLink = current.source?.url
@@ -750,10 +772,11 @@ function renderIntegrityRegistry(title, section, renderer) {
   else if (current.status === 'DISABLED') emptyLabel = 'Consulta ainda não habilitada';
   else if (current.status === 'IDENTITY_NOT_READY') emptyLabel = 'Sincronização em andamento';
   else if (current.status === 'PARTIAL') emptyLabel = 'Consulta parcial';
+  else if (current.status === 'NOT_APPLICABLE') emptyLabel = 'Sem identificador aplicável';
   const content = records.length
     ? `<div class="integrity-record-list">${records.map(renderer).join('')}</div>`
     : `<div class="integrity-empty integrity-empty-${escapeHtml(String(current.status || '').toLowerCase())}"><strong>${emptyLabel}</strong><p>${escapeHtml(current.message || 'Nenhuma conclusão substituta foi exibida.')}</p>${sourceLink}</div>`;
-  return `<section class="integrity-group"><div class="integrity-group-heading"><div><span>FONTE OFICIAL</span><h4>${escapeHtml(title)}</h4></div>${current.source?.name ? `<small>${escapeHtml(current.source.name)}</small>` : ''}</div>${content}${records.length ? `<p class="integrity-source-note">${escapeHtml(current.message || '')} ${sourceLink}</p>` : ''}</section>`;
+  return `<section class="integrity-group"><div class="integrity-group-heading"><div><span>${escapeHtml(kindLabel)}</span><h4>${escapeHtml(title)}</h4></div>${current.source?.name ? `<small>${escapeHtml(current.source.name)}</small>` : ''}</div>${content}${records.length ? `<p class="integrity-source-note">${escapeHtml(current.message || '')} ${sourceLink}</p>` : ''}</section>`;
 }
 
 function renderIntegrityMoney(data) {
@@ -761,7 +784,7 @@ function renderIntegrityMoney(data) {
   const assets = data.declaredAssets || {};
   const legislative = data.legislativeExpenses || {};
   const campaignFacts = campaign.status === 'PUBLISHED'
-    ? `${fact('Receitas de campanha', formatCurrency(campaign.totalRevenue))}${fact('Despesas de campanha', formatCurrency(campaign.totalExpense))}${fact('Lançamentos publicados', formatNumber(Number(campaign.revenueRecords || 0) + Number(campaign.expenseRecords || 0)))}`
+    ? `${fact('Receitas de campanha', formatCurrency(campaign.totalRevenue))}${fact(campaign.expenseBasis === 'CONTRACTED' ? 'Despesas contratadas' : 'Despesas de campanha', formatCurrency(campaign.totalExpense))}${fact('Lançamentos publicados', formatNumber(Number(campaign.revenueRecords || 0) + Number(campaign.expenseRecords || 0)))}`
     : `${fact('Receitas de campanha', 'Ainda não publicadas')}${fact('Despesas de campanha', 'Ainda não publicadas')}`;
   const assetFacts = `${fact('Bens declarados', assets.status === 'PUBLISHED' ? formatCurrency(assets.total) : 'Nenhum no arquivo atual')}${fact('Itens de bens publicados', formatNumber(assets.count))}`;
   const legislativeFact = legislative.status === 'PUBLISHED'
@@ -820,8 +843,8 @@ function renderIntegrityData(data, compact = false) {
     const retry = compact ? '' : '<button class="secondary-button integrity-retry-button" type="button" data-integrity-retry>Tentar novamente</button>';
     return `<div class="not-published"><p>${escapeHtml(data?.message || 'As fontes oficiais não responderam agora. Nenhuma conclusão substituta foi exibida.')}</p>${retry}</div>`;
   }
-  const methodology = compact ? '' : `<div class="integrity-methodology"><strong>Como interpretar</strong><p>${escapeHtml(data.methodology?.legalStage || '')}</p><p>${escapeHtml(data.methodology?.absence || '')}</p><p>${escapeHtml(data.methodology?.privacy || '')}</p></div>`;
-  return `<div class="integrity-check"><div class="integrity-alert"><div><span>LEITURA RESPONSÁVEL</span><strong>${escapeHtml(data.summary?.label || 'Consulta oficial concluída')}</strong></div><p>${escapeHtml(data.summary?.warning || 'Cada registro é mostrado com sua situação e fonte; não há nota automática.')}</p></div>${renderIntegrityRegistry('Decisões e impedimentos do TCU', data.publicAccounts, renderTcuRecord)}${renderIntegrityRegistry('Sanções administrativas federais', data.sanctions, renderSanctionRecord)}${renderIntegrityMoney(data)}${methodology}<p class="muted">Consulta realizada em ${formatDate(data.checkedAt)}.</p></div>`;
+  const methodology = compact ? '' : `<div class="integrity-methodology"><strong>Como interpretar</strong><p>${escapeHtml(data.methodology?.legalStage || '')}</p><p>${escapeHtml(data.methodology?.absence || '')}</p><p>${escapeHtml(data.methodology?.privacy || '')}</p><p>${escapeHtml(data.methodology?.datajud || '')}</p><p>${escapeHtml(data.methodology?.factCheck || '')}</p></div>`;
+  return `<div class="integrity-check"><div class="integrity-alert"><div><span>LEITURA RESPONSÁVEL</span><strong>${escapeHtml(data.summary?.label || 'Consulta oficial concluída')}</strong></div><p>${escapeHtml(data.summary?.warning || 'Cada registro é mostrado com sua situação e fonte; não há nota automática.')}</p></div>${renderIntegrityRegistry('Decisões e impedimentos do TCU', data.publicAccounts, renderTcuRecord)}${renderIntegrityRegistry('Sanções administrativas federais', data.sanctions, renderSanctionRecord)}${renderIntegrityRegistry('Processo de registro no DataJud', data.datajud, renderDatajudRecord)}${renderIntegrityRegistry('Checagens relacionadas à busca textual', data.factChecks, renderFactCheckRecord, 'FONTE SECUNDÁRIA · SEM ATRIBUIÇÃO AUTOMÁTICA')}${renderIntegrityMoney(data)}${methodology}<p class="muted">Consulta realizada em ${formatDate(data.checkedAt)}.</p></div>`;
 }
 
 function renderLegislativeReportForm(proposal, candidateId) {
@@ -1455,7 +1478,7 @@ async function loadSources() {
       : '<section class="source-ok-panel"><strong>Todas as fontes automáticas responderam na última execução.</strong></section>';
     elements.sourceGrid.innerHTML = payload.sources.map((source) => {
       const current = source.status || {};
-      const stateLabel = { OK: 'Ativa', PARTIAL: 'Parcial', PLANNED: 'Planejada', NOT_SYNCED: 'Não sincronizada', UNAVAILABLE: 'Ainda indisponível', ERROR: 'Falha temporária' }[current.state] || current.state;
+      const stateLabel = { OK: 'Ativa', PARTIAL: 'Parcial', PLANNED: 'Planejada', CREDENTIAL_REQUIRED: 'Aguardando chave', NOT_SYNCED: 'Não sincronizada', UNAVAILABLE: 'Ainda indisponível', ERROR: 'Falha temporária' }[current.state] || current.state;
       return `<article class="source-card"><div><span class="source-state ${String(current.state || '').toLowerCase()}">${escapeHtml(stateLabel)}</span><span class="source-kind">${source.kind === 'OFFICIAL' ? 'Fonte oficial' : 'Fonte secundária'}</span></div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(source.description)}</p><div class="source-meta"><p><strong>Periodicidade:</strong> ${escapeHtml(source.cadence)}</p><p>${escapeHtml(current.message || '')}</p>${current.lastSuccessAt ? `<p><strong>Último sucesso:</strong> ${formatDate(current.lastSuccessAt)}</p>` : ''}${current.lastAttemptAt ? `<p><strong>Última tentativa:</strong> ${formatDate(current.lastAttemptAt)}</p>` : ''}<a class="inline-link" href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">Abrir fonte ↗</a></div></article>`;
     }).join('');
     elements.syncRuns.innerHTML = payload.syncRuns.length ? payload.syncRuns.map((run) => `<div class="sync-row"><strong>${escapeHtml(run.sourceId)}</strong><span>${escapeHtml(run.status)}</span><span>${formatDate(run.finishedAt || run.startedAt)}</span><span>${run.recordCount ? formatNumber(run.recordCount) : '—'}</span></div>`).join('') : '<div class="sync-row"><span>Ainda não há execuções registradas.</span></div>';

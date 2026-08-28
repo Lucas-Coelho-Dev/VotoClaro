@@ -306,7 +306,8 @@ function attachRelatedData(candidates, assets, socialLinks, revenues, expenses) 
       candidate.finance = {
         ...item,
         balance: item.totalRevenue - item.totalExpense,
-        note: 'Valores publicados pela Justiça Eleitoral; receitas podem ser informadas com até 72 horas de defasagem.',
+        expenseBasis: 'CONTRACTED',
+        note: 'Valores publicados pela Justiça Eleitoral. As despesas exibidas são as contratadas; receitas podem ser informadas com até 72 horas de defasagem.',
       };
     }
     if (candidate.assets.length) candidate.sources.push(officialSource(SOURCES.tseAssets, assets.find((a) => a.candidateId === candidate.id) || {}));

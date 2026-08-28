@@ -6,6 +6,10 @@ const {
   legislativeService,
   initializeRuntime,
 } = require('../src/runtime');
+const {
+  LOCAL_LLM_ANALYSIS_VERSION,
+  LEGISLATIVE_LLM_ANALYSIS_VERSION,
+} = require('../src/local-llm');
 
 let timer;
 let stopping = false;
@@ -34,6 +38,18 @@ async function processQueues() {
 
 async function start() {
   await initializeRuntime();
+  const recovered = await store.recoverInterruptedAnalyses({
+    planVersion: LOCAL_LLM_ANALYSIS_VERSION,
+    legislativeVersion: LEGISLATIVE_LLM_ANALYSIS_VERSION,
+  });
+  console.log(`Filas recuperadas: ${recovered.plans} plano(s), ${recovered.legislativeItems} item(ns) legislativo(s) e ${recovered.transientPlanFailures} falha(s) transitória(s).`);
+  if (String(process.env.AI_WORKER_ONCE || '').toLowerCase() === 'true') {
+    console.log('Trabalhador da IA executando um ciclo único.');
+    await processQueues();
+    await store.close();
+    console.log('Ciclo único da IA concluído.');
+    return;
+  }
   setImmediate(processQueues);
   timer = setInterval(processQueues, config.aiWorkerIntervalMinutes * 60 * 1000);
   console.log(`Trabalhador dedicado da IA ativo a cada ${config.aiWorkerIntervalMinutes} minutos.`);

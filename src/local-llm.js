@@ -2,7 +2,7 @@ const { z } = require('zod');
 
 const LOCAL_LLM_ANALYSIS_VERSION = 'local-llm-v16';
 const LOCAL_LLM_PROMPT_VERSION = 'government-plan-theme-explanation-v16';
-const LEGISLATIVE_LLM_ANALYSIS_VERSION = 'legislative-plain-language-v3';
+const LEGISLATIVE_LLM_ANALYSIS_VERSION = 'legislative-plain-language-v4';
 const LEGISLATIVE_LLM_PROMPT_VERSION = 'legislative-fine-print-v3';
 const DOCUMENT_QA_PROMPT_VERSION = 'official-document-qa-v1';
 
@@ -186,6 +186,19 @@ function preferredLegislativeSummary(value) {
   const text = String(value || '').trim();
   const updated = text.split(/NOVA EMENTA\s*:/iu).pop().trim();
   return updated || text;
+}
+
+function deterministicLegislativeExplanation(item, sourceText) {
+  const official = preferredLegislativeSummary(item?.summary).replace(/[.!?]+$/u, '').trim();
+  const lowered = official ? `${official.charAt(0).toLowerCase()}${official.slice(1)}` : 'descreve a alteração registrada na ementa';
+  const result = {
+    plainLanguage: `Em termos simples, o texto oficial ${lowered}.`,
+    possibleImpact: groundedLegislativeImpact('', sourceText, item),
+    finePrint: legislativeFinePrint(item),
+    validationFallback: true,
+  };
+  assertNoUnsupportedNumbers(result, sourceText);
+  return result;
 }
 
 function polishOfficialAnswer(value) {
@@ -586,12 +599,20 @@ class LocalLlmClient {
         ? await streamedMessageContent(response)
         : (await response.json())?.choices?.[0]?.message?.content;
       const parsed = legislativeExplanationSchema.parse(parseJsonContent(content));
-      assertNoUnsupportedNumbers(parsed, sourceText);
+      let explanation = parsed;
+      try {
+        assertNoUnsupportedNumbers(parsed, sourceText);
+      } catch (error) {
+        if (!/número não sustentado/iu.test(error.message)) throw error;
+        explanation = deterministicLegislativeExplanation(item, sourceText);
+      }
       this.lastSuccessAt = new Date().toISOString();
       this.lastError = null;
       return {
-        ...parsed,
-        possibleImpact: groundedLegislativeImpact(parsed.possibleImpact, sourceText, item),
+        ...explanation,
+        possibleImpact: explanation.validationFallback
+          ? explanation.possibleImpact
+          : groundedLegislativeImpact(explanation.possibleImpact, sourceText, item),
         finePrint: legislativeFinePrint(item),
       };
     } catch (error) {
@@ -617,6 +638,7 @@ module.exports = {
   LEGISLATIVE_LLM_PROMPT_VERSION,
   llmResponseSchema,
   legislativeExplanationSchema,
+  deterministicLegislativeExplanation,
   localEndpoint,
   finishOfficialAnswer,
   polishOfficialAnswer,

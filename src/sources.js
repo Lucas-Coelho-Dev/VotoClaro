@@ -71,8 +71,9 @@ const SOURCES = Object.freeze({
     authority: 'Tribunal Superior Eleitoral',
     kind: 'OFFICIAL',
     cadence: 'Durante a campanha; recursos podem ser informados em até 72 horas',
-    url: 'https://www.tse.jus.br/eleicoes/eleicoes-2026-content/prestacao-de-contas',
-    resourceUrl: 'https://cdn.tse.jus.br/estatistica/sead/odsele/prestacao_contas/receitas_candidatos_2026.zip',
+    url: 'https://dadosabertos.tse.jus.br/dataset/prestacao-de-contas-eleitorais-2026',
+    resourceUrl: 'https://cdn.tse.jus.br/estatistica/sead/odsele/prestacao_contas/prestacao_de_contas_eleitorais_candidatos_2026.zip',
+    archiveEntryPattern: /^receitas_candidatos_2026_BRASIL\.csv$/i,
     description: 'Receitas de campanha publicadas pela Justiça Eleitoral.',
     optional: true,
   },
@@ -82,9 +83,10 @@ const SOURCES = Object.freeze({
     authority: 'Tribunal Superior Eleitoral',
     kind: 'OFFICIAL',
     cadence: 'Durante a campanha, conforme entrega das prestações',
-    url: 'https://www.tse.jus.br/eleicoes/eleicoes-2026-content/prestacao-de-contas',
-    resourceUrl: 'https://cdn.tse.jus.br/estatistica/sead/odsele/prestacao_contas/despesas_candidatos_2026.zip',
-    description: 'Despesas de campanha publicadas pela Justiça Eleitoral.',
+    url: 'https://dadosabertos.tse.jus.br/dataset/prestacao-de-contas-eleitorais-2026',
+    resourceUrl: 'https://cdn.tse.jus.br/estatistica/sead/odsele/prestacao_contas/prestacao_de_contas_eleitorais_candidatos_2026.zip',
+    archiveEntryPattern: /^despesas_contratadas_candidatos_2026_BRASIL\.csv$/i,
+    description: 'Despesas contratadas de campanha publicadas pela Justiça Eleitoral.',
     optional: true,
   },
   camara: {
@@ -144,8 +146,9 @@ const SOURCES = Object.freeze({
     kind: 'OFFICIAL',
     cadence: 'Conforme atualização dos tribunais',
     url: 'https://www.cnj.jus.br/sistemas/datajud/api-publica/',
-    description: 'Metadados de processos públicos. Correspondências exigem identificação inequívoca e revisão.',
-    planned: true,
+    description: 'Metadados do processo de registro eleitoral publicado pelo TSE, consultado pelo número CNJ exato. Não representa pesquisa de histórico judicial da pessoa.',
+    onDemand: true,
+    requiresCredential: true,
     requiresReview: true,
   },
   factCheck: {
@@ -155,14 +158,14 @@ const SOURCES = Object.freeze({
     kind: 'SECONDARY',
     cadence: 'Consulta periódica',
     url: 'https://developers.google.com/fact-check/tools/api/reference/rest',
-    description: 'Localização de alegações já analisadas por organizações de checagem.',
-    planned: true,
+    description: 'Localização textual de alegações já analisadas por organizações de checagem. Resultados não são atribuídos automaticamente à candidatura.',
+    onDemand: true,
     requiresCredential: true,
   },
 });
 
 function publicSources(statuses = {}) {
-  return Object.values(SOURCES).map(({ resourceUrl, archiveUrlTemplate, ...source }) => ({
+  return Object.values(SOURCES).map(({ resourceUrl, archiveUrlTemplate, archiveEntryPattern, ...source }) => ({
     ...source,
     status: statuses[source.id] || {
       state: source.planned ? 'PLANNED' : source.onDemand ? 'OK' : 'NOT_SYNCED',

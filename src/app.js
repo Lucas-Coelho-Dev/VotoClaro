@@ -19,7 +19,7 @@ const {
   integrityService,
   initializeRuntime,
 } = require('./runtime');
-const { publicSources } = require('./sources');
+const { SOURCES, publicSources } = require('./sources');
 const { searchable, isVoterFacingOffice, attachRunningMates } = require('./normalize');
 const { IDEOLOGY_SOURCE, IDEOLOGY_FILTERS, getPartyIdeology, partyMarkSvg } = require('./parties');
 const { safeErrorMessage } = require('./safe-log');
@@ -272,10 +272,30 @@ const analysisReportRateLimit = rateLimit({
 
 app.get('/api/v1/sources', (request, response) => {
   const snapshot = store.getSnapshot();
+  const connectorStatuses = {
+    [SOURCES.cgu.id]: {
+      state: config.portalTransparenciaToken ? 'OK' : 'CREDENTIAL_REQUIRED',
+      message: config.portalTransparenciaToken
+        ? 'Consulta oficial sob demanda habilitada por identificador exato.'
+        : 'Aguardando chave gratuita do Portal da Transparência no servidor.',
+    },
+    [SOURCES.cnj.id]: {
+      state: config.datajudApiKey ? 'OK' : 'CREDENTIAL_REQUIRED',
+      message: config.datajudApiKey
+        ? 'Consulta do processo de registro por número CNJ exato habilitada.'
+        : 'Aguardando a chave pública vigente do DataJud no servidor.',
+    },
+    [SOURCES.factCheck.id]: {
+      state: config.googleFactCheckApiKey ? 'OK' : 'CREDENTIAL_REQUIRED',
+      message: config.googleFactCheckApiKey
+        ? 'Busca textual secundária habilitada, sem atribuição automática.'
+        : 'Aguardando chave restrita da Fact Check Tools API no servidor.',
+    },
+  };
   response.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
   response.json({
     dataPolicy: 'Dados oficiais são reproduzidos sem estimativas. Fontes secundárias nunca substituem a fonte oficial.',
-    sources: publicSources(snapshot?.sourceStatuses || {}),
+    sources: publicSources({ ...(snapshot?.sourceStatuses || {}), ...connectorStatuses }),
     alerts: sourceAlerts(snapshot),
     syncRuns: store.getRuns(),
     snapshot: snapshot?.meta || null,

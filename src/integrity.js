@@ -113,6 +113,10 @@ class IntegrityService {
     this.errorCacheTtlMs = (Number(config.integrityErrorCacheTtlSeconds) || 300) * 1000;
     this.maxResponseBytes = Number(config.integrityMaxResponseBytes) || 1024 * 1024;
     this.portalToken = String(config.portalTransparenciaToken || '').trim();
+    this.datajudApiKey = String(config.datajudApiKey || '').replace(/^APIKey\s+/i, '').trim();
+    this.googleFactCheckApiKey = String(config.googleFactCheckApiKey || '').trim();
+    this.factCheckMaxAgeDays = Math.max(1, Number(config.factCheckMaxAgeDays) || 2920);
+    this.factCheckPageSize = Math.max(1, Math.min(20, Number(config.factCheckPageSize) || 10));
     this.lastCheckAt = null;
     this.lastState = 'NOT_QUERIED';
   }
@@ -124,6 +128,8 @@ class IntegrityService {
       identityVault: this.identityVault.status(),
       tcu: 'ACTIVE',
       portalTransparencia: this.portalToken ? 'ACTIVE' : 'CREDENTIAL_REQUIRED',
+      datajud: this.datajudApiKey ? 'ACTIVE' : 'CREDENTIAL_REQUIRED',
+      googleFactCheck: this.googleFactCheckApiKey ? 'ACTIVE' : 'CREDENTIAL_REQUIRED',
       matching: 'EXACT_OFFICIAL_IDENTIFIER',
     };
   }
@@ -308,32 +314,191 @@ class IntegrityService {
     };
   }
 
-  async remoteData(candidateId, cpf, forceRefresh) {
-    if (!cpf) {
+  datajudSource() {
+    return {
+      id: SOURCES.cnj.id,
+      name: SOURCES.cnj.name,
+      authority: SOURCES.cnj.authority,
+      url: SOURCES.cnj.url,
+      fetchedAt: new Date().toISOString(),
+      confidence: 'OFFICIAL',
+    };
+  }
+
+  datajudAliases(candidate) {
+    const uf = String(candidate?.uf || '').toLowerCase();
+    if (/^[a-z]{2}$/.test(uf)) return [`api_publica_tre-${uf}`, 'api_publica_tse'];
+    return ['api_publica_tse'];
+  }
+
+  sanitizeDatajudHit(hit, expectedProcess) {
+    const source = hit?._source || {};
+    const processNumber = digits(source.numeroProcesso);
+    if (processNumber !== expectedProcess) return null;
+    const movements = Array.isArray(source.movimentos) ? source.movimentos : [];
+    const lastMovement = [...movements]
+      .sort((left, right) => String(right?.dataHora || '').localeCompare(String(left?.dataHora || '')))[0];
+    return {
+      processNumber,
+      court: firstText(source.tribunal),
+      degree: firstText(source.grau),
+      filingDate: firstText(source.dataAjuizamento),
+      className: firstText(source.classe?.nome),
+      judgingBody: firstText(source.orgaoJulgador?.nome),
+      subjects: (Array.isArray(source.assuntos) ? source.assuntos : [])
+        .map((subject) => firstText(subject?.nome))
+        .filter(Boolean)
+        .slice(0, 10),
+      lastMovement: lastMovement ? {
+        date: firstText(lastMovement.dataHora),
+        name: firstText(lastMovement.nome),
+      } : null,
+      stage: 'ELECTORAL_REGISTRATION_PROCESS',
+      explanation: 'Metadados do processo de registro eleitoral cujo número foi publicado pelo TSE. Este resultado não representa pesquisa do histórico judicial pessoal da candidatura.',
+    };
+  }
+
+  async queryDatajud(candidate) {
+    const source = this.datajudSource();
+    const processNumber = digits(candidate?.registrationProcess);
+    if (processNumber.length !== 20) {
       return {
-        checkedAt: new Date().toISOString(),
-        publicAccounts: {
-          status: 'IDENTITY_NOT_READY', records: [], source: this.tcuSource(),
-          message: 'A identificação oficial ainda não está carregada na memória do servidor. Aguarde a sincronização do TSE.',
-        },
-        sanctions: {
-          status: this.portalToken ? 'IDENTITY_NOT_READY' : 'DISABLED', records: [],
-          source: { id: SOURCES.cgu.id, name: SOURCES.cgu.name, authority: SOURCES.cgu.authority, url: SOURCES.cgu.url, confidence: 'OFFICIAL' },
-          message: this.portalToken
-            ? 'A identificação oficial ainda não está carregada na memória do servidor.'
-            : 'A chave gratuita da API do Portal da Transparência ainda não foi configurada neste ambiente.',
-        },
+        status: 'NOT_APPLICABLE', records: [], source,
+        message: 'O TSE não publicou um número CNJ válido de processo de registro para esta candidatura.',
       };
     }
+    if (!this.datajudApiKey) {
+      return {
+        status: 'DISABLED', records: [], source,
+        message: 'A chave pública vigente do DataJud ainda não foi configurada no servidor.',
+      };
+    }
+    const body = JSON.stringify({
+      size: 5,
+      _source: ['numeroProcesso', 'tribunal', 'grau', 'dataAjuizamento', 'classe', 'orgaoJulgador', 'assuntos', 'movimentos'],
+      query: { match: { numeroProcesso: processNumber } },
+    });
+    const results = await Promise.allSettled(this.datajudAliases(candidate).map(async (alias) => {
+      const payload = await this.requestJson(`https://api-publica.datajud.cnj.jus.br/${alias}/_search`, {
+        method: 'POST',
+        headers: {
+          Authorization: `APIKey ${this.datajudApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
+      return (Array.isArray(payload?.hits?.hits) ? payload.hits.hits : [])
+        .map((hit) => this.sanitizeDatajudHit(hit, processNumber))
+        .filter(Boolean);
+    }));
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const records = [...new Map(
+      fulfilled.flatMap((result) => result.value).map((record) => [`${record.court}|${record.degree}|${record.processNumber}`, record]),
+    ).values()];
+    if (!fulfilled.length) {
+      return {
+        status: 'UNAVAILABLE', records: [], source,
+        message: 'O DataJud não respondeu agora. Nenhuma associação substituta foi feita por nome.',
+      };
+    }
+    return {
+      status: records.length ? 'FOUND' : (fulfilled.length < this.datajudAliases(candidate).length ? 'PARTIAL' : 'NONE_FOUND'),
+      records,
+      partial: fulfilled.length < this.datajudAliases(candidate).length,
+      source,
+      message: records.length
+        ? 'Processo de registro localizado pelo número CNJ exato publicado pelo TSE.'
+        : 'O número de registro foi consultado, mas nenhum processo correspondente foi retornado. Isso não autoriza busca ou associação por nome.',
+    };
+  }
+
+  factCheckSource() {
+    return {
+      id: SOURCES.factCheck.id,
+      name: SOURCES.factCheck.name,
+      authority: SOURCES.factCheck.authority,
+      url: SOURCES.factCheck.url,
+      fetchedAt: new Date().toISOString(),
+      confidence: 'SECONDARY',
+    };
+  }
+
+  async queryFactChecks(candidate) {
+    const source = this.factCheckSource();
+    if (!this.googleFactCheckApiKey) {
+      return {
+        status: 'DISABLED', records: [], source,
+        message: 'A chave do Google Fact Check Tools ainda não foi configurada no servidor.',
+      };
+    }
+    const query = firstText(candidate?.name, candidate?.ballotName);
+    if (!query) return { status: 'NOT_APPLICABLE', records: [], source, message: 'A candidatura não possui nome oficial disponível para a busca textual.' };
+    const parameters = new URLSearchParams({
+      query,
+      languageCode: 'pt',
+      maxAgeDays: String(this.factCheckMaxAgeDays),
+      pageSize: String(this.factCheckPageSize),
+      key: this.googleFactCheckApiKey,
+    });
+    try {
+      const payload = await this.requestJson(`https://factchecktools.googleapis.com/v1alpha1/claims:search?${parameters}`);
+      const records = (Array.isArray(payload?.claims) ? payload.claims : []).flatMap((claim) => (
+        (Array.isArray(claim?.claimReview) ? claim.claimReview : []).map((review) => ({
+          claim: firstText(claim.text),
+          claimant: firstText(claim.claimant),
+          claimDate: firstText(claim.claimDate),
+          publisher: firstText(review?.publisher?.name, review?.publisher?.site),
+          publisherSite: firstText(review?.publisher?.site),
+          title: firstText(review.title),
+          reviewDate: firstText(review.reviewDate),
+          rating: firstText(review.textualRating),
+          languageCode: firstText(review.languageCode),
+          url: safeUrl(review.url),
+          stage: 'SECONDARY_FACT_CHECK',
+        }))
+      )).filter((record) => record.claim && record.url).slice(0, this.factCheckPageSize);
+      return {
+        status: records.length ? 'FOUND' : 'NONE_FOUND', records, source, query,
+        message: records.length
+          ? 'Checagens localizadas por busca textual. O VotoClaro não presume que toda alegação encontrada seja de autoria da candidatura.'
+          : 'Nenhuma checagem foi retornada para a busca textual. Isso não comprova que não existam alegações ou verificações publicadas.',
+      };
+    } catch {
+      return {
+        status: 'UNAVAILABLE', records: [], source, query,
+        message: 'O serviço de checagens não respondeu agora. Nenhum resultado substituto foi criado.',
+      };
+    }
+  }
+
+  async remoteData(candidate, cpf, forceRefresh) {
+    const candidateId = candidate.id;
     const cached = this.cache.get(candidateId);
     if (!forceRefresh && cached) {
       const ttl = cached.hasError ? this.errorCacheTtlMs : this.cacheTtlMs;
       if (Date.now() - cached.savedAt < ttl) return cached.data;
     }
-    const [publicAccounts, sanctions] = await Promise.all([this.queryTcu(cpf), this.queryPortal(cpf)]);
-    const data = { checkedAt: new Date().toISOString(), publicAccounts, sanctions };
+    const publicAccountsTask = cpf ? this.queryTcu(cpf) : Promise.resolve({
+      status: 'IDENTITY_NOT_READY', records: [], source: this.tcuSource(),
+      message: 'A identificação oficial ainda não está carregada na memória do servidor. Aguarde a sincronização do TSE.',
+    });
+    const sanctionsTask = cpf ? this.queryPortal(cpf) : Promise.resolve({
+      status: this.portalToken ? 'IDENTITY_NOT_READY' : 'DISABLED', records: [],
+      source: { id: SOURCES.cgu.id, name: SOURCES.cgu.name, authority: SOURCES.cgu.authority, url: SOURCES.cgu.url, confidence: 'OFFICIAL' },
+      message: this.portalToken
+        ? 'A identificação oficial ainda não está carregada na memória do servidor.'
+        : 'A chave gratuita da API do Portal da Transparência ainda não foi configurada neste ambiente.',
+    });
+    const [publicAccounts, sanctions, datajud, factChecks] = await Promise.all([
+      publicAccountsTask,
+      sanctionsTask,
+      this.queryDatajud(candidate),
+      this.queryFactChecks(candidate),
+    ]);
+    const data = { checkedAt: new Date().toISOString(), publicAccounts, sanctions, datajud, factChecks };
     const hasError = ['UNAVAILABLE', 'PARTIAL'].includes(publicAccounts.status)
-      || ['UNAVAILABLE', 'PARTIAL'].includes(sanctions.status);
+      || ['UNAVAILABLE', 'PARTIAL'].includes(sanctions.status)
+      || ['UNAVAILABLE', 'PARTIAL'].includes(datajud.status);
     this.cache.set(candidateId, { savedAt: Date.now(), hasError, data });
     this.lastCheckAt = data.checkedAt;
     this.lastState = hasError ? 'PARTIAL' : 'OK';
@@ -355,6 +520,7 @@ class IntegrityService {
       balance: Number(candidate.finance.balance || 0),
       revenueRecords: Number(candidate.finance.revenueRecords || 0),
       expenseRecords: Number(candidate.finance.expenseRecords || 0),
+      expenseBasis: candidate.finance.expenseBasis || 'CONTRACTED',
       source: this.tseFinanceSource(),
       message: candidate.finance.note || 'Valores publicados pela Justiça Eleitoral.',
     };
@@ -417,7 +583,7 @@ class IntegrityService {
 
   async get(candidate, options = {}) {
     const cpf = this.identityVault.getCpf(candidate.id);
-    const remote = await this.remoteData(candidate.id, cpf, Boolean(options.forceRefresh));
+    const remote = await this.remoteData(candidate, cpf, Boolean(options.forceRefresh));
     const definitiveRecords = [
       ...(remote.publicAccounts.records || []),
       ...(remote.sanctions.records || []),
@@ -434,11 +600,15 @@ class IntegrityService {
       },
       publicAccounts: remote.publicAccounts,
       sanctions: remote.sanctions,
+      datajud: remote.datajud,
+      factChecks: remote.factChecks,
       campaignFinance: this.campaignFinance(candidate),
       declaredAssets: this.declaredAssets(candidate),
       legislativeExpenses: this.legislativeExpenses(candidate, options.legislative, options.legislativeState),
       methodology: {
         matching: 'TCU e Portal da Transparência são consultados somente pelo identificador oficial completo do candidato, nunca apenas pelo nome.',
+        datajud: 'O DataJud é consultado somente pelo número CNJ do processo de registro publicado pelo TSE. Ele não é usado para procurar histórico judicial por nome.',
+        factCheck: 'Checagens são resultados textuais de fonte secundária e não são atribuídas automaticamente à candidatura.',
         privacy: 'O identificador é mantido apenas na memória do servidor durante a sincronização e a consulta; não é gravado no snapshot, enviado ao navegador, incluído em logs ou retornado pela API.',
         legalStage: 'Investigação, acusação, sanção administrativa, decisão de contas e condenação judicial são situações distintas. Este módulo não presume culpa nem inelegibilidade.',
         absence: 'Ausência de resultado não é atestado de idoneidade: uma fonte pode estar desatualizada, fora do escopo ou temporariamente indisponível.',
